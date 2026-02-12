@@ -256,26 +256,55 @@ function onStopClick(stop: StopInfo) {
         detourStep = 'trace-path';
         detourPathPoints.push([stop.stop_lat, stop.stop_lon]);
         updateDetourStepUI();
+        showMapTooltip([stop.stop_lat, stop.stop_lon], '✔ Diverge set! Now click the map to trace the detour path.', 3000);
     } else if (detourStep === 'select-rejoin') {
-        rejoinStopId = stop.stop_id;
-        rejoinStop = stop;
-
-        // Highlight rejoin stop
-        L.circleMarker([stop.stop_lat, stop.stop_lon], {
-            radius: 8,
-            fillColor: '#10b981',
-            color: '#ffffff',
-            weight: 2,
-            fillOpacity: 1,
-        }).bindTooltip('REJOIN: ' + stop.stop_name, { permanent: true, direction: 'top' })
-            .addTo(detourShapeLayer);
-
-        detourStep = 'configure';
-        updateDetourStepUI();
+        finalizeRejoinStop(stop);
     } else if (detourStep === 'trace-path') {
-        // Clicking a route stop during trace can be used as a replacement stop
+        // If we have traced at least 2 points, treat clicking a route stop as the rejoin point
+        if (detourPathPoints.length >= 2) {
+            // Check if this stop is AFTER the diverge stop in the sequence
+            const divergeIdx = currentRouteStops.findIndex(s => s.stop_id === divergeStopId);
+            const thisIdx = currentRouteStops.findIndex(s => s.stop_id === stop.stop_id);
+            if (thisIdx > divergeIdx) {
+                // Auto-rejoin: snap the detour line to this stop and go to configure
+                finalizeRejoinStop(stop);
+                return;
+            }
+        }
+        // Otherwise treat as a replacement stop along the detour
         addReplacementStop(stop.stop_id, stop.stop_name, stop.stop_lat, stop.stop_lon, false);
     }
+}
+
+async function finalizeRejoinStop(stop: StopInfo) {
+    rejoinStopId = stop.stop_id;
+    rejoinStop = stop;
+
+    // Snap detour line from last point to rejoin stop
+    if (detourPathPoints.length > 0) {
+        const lastPt = detourPathPoints[detourPathPoints.length - 1];
+        const snapped = await snapToRoad(lastPt[0], lastPt[1], stop.stop_lat, stop.stop_lon);
+        if (snapped.length > 1) {
+            for (let i = 1; i < snapped.length; i++) detourPathPoints.push(snapped[i]);
+        } else {
+            detourPathPoints.push([stop.stop_lat, stop.stop_lon]);
+        }
+    }
+    redrawDetourPath();
+
+    // Highlight rejoin stop
+    L.circleMarker([stop.stop_lat, stop.stop_lon], {
+        radius: 8,
+        fillColor: '#10b981',
+        color: '#ffffff',
+        weight: 2,
+        fillOpacity: 1,
+    }).bindTooltip('REJOIN: ' + stop.stop_name, { permanent: true, direction: 'top' })
+        .addTo(detourShapeLayer);
+
+    detourStep = 'configure';
+    updateDetourStepUI();
+    showMapTooltip([stop.stop_lat, stop.stop_lon], '✔ Rejoin set! Configure detour details in the sidebar.', 3000);
 }
 
 async function onMapClick(e: any) {
@@ -476,7 +505,7 @@ function updateDetourStepUI() {
             document.getElementById('detour-config')!.style.display = 'none';
             break;
         case 'trace-path':
-            instructions.innerHTML = 'Click on the map to trace the detour path <em>(snaps to roads)</em>. Right-click or press Undo to remove last segment. When done, click <strong>"Set Rejoin Point"</strong>.';
+            instructions.innerHTML = 'Click the map to trace the detour path <em>(snaps to roads)</em>. Click a <strong>route stop</strong> to set the rejoin point, or right-click to undo.';
             // Show undo and set-rejoin buttons
             instructions.innerHTML += '<br><br><div style="display:flex;gap:6px"><button class="btn btn-secondary btn-sm" id="btn-undo-segment">↩ Undo</button><button class="btn btn-secondary btn-sm" id="btn-set-rejoin">Set Rejoin Point →</button></div>';
             document.getElementById('btn-undo-segment')?.addEventListener('click', undoLastSegment);
@@ -500,27 +529,7 @@ function updateDetourStepUI() {
     }
 }
 
-// ─── Temp Stop Modal ───
 
-function showTempStopModal() {
-    document.getElementById('temp-stop-modal')!.style.display = 'flex';
-    (document.getElementById('temp-stop-name') as HTMLInputElement).value = '';
-    (document.getElementById('temp-stop-name') as HTMLInputElement).focus();
-}
-
-function hideTempStopModal() {
-    document.getElementById('temp-stop-modal')!.style.display = 'none';
-    pendingTempStopLatLng = null;
-}
-
-function confirmTempStop() {
-    const name = (document.getElementById('temp-stop-name') as HTMLInputElement).value.trim();
-    if (!name || !pendingTempStopLatLng) return;
-
-    const stopId = `temp_${++tempStopCounter}_${Date.now()}`;
-    addReplacementStop(stopId, name, pendingTempStopLatLng[0], pendingTempStopLatLng[1], true);
-    hideTempStopModal();
-}
 
 // ─── Activate Detour ───
 
@@ -714,13 +723,31 @@ async function updateVehicles() {
             : data.vehicles;
 
         for (const v of vehicles) {
+            const route = allRoutes.find(r => r.route_id === v.routeId);
+            const routeName = route ? `${route.route_short_name} — ${route.route_long_name}` : v.routeId;
+            const dirLabel = v.directionId === 0 ? 'Outbound' : 'Inbound';
+            const speedMph = Math.round(v.speed * 2.237);
+            const statusLabel = v.status === 'IN_TRANSIT' ? '🟢 In Transit' : v.status === 'AT_STOP' ? '🔴 At Stop' : v.status;
+
             const icon = L.divIcon({
                 className: 'vehicle-marker-container',
-                html: `<div class="vehicle-marker" style="transform:rotate(${v.bearing}deg)" title="Bus ${v.vehicleId} — ${v.status}">🚌</div>`,
+                html: `<div class="vehicle-marker" style="transform:rotate(${v.bearing}deg)">🚌</div>`,
                 iconSize: [24, 24],
                 iconAnchor: [12, 12],
             });
-            L.marker([v.lat, v.lon], { icon }).addTo(vehiclesLayer);
+            const marker = L.marker([v.lat, v.lon], { icon });
+            marker.bindTooltip(`
+                <div class="vehicle-tooltip">
+                    <div class="vt-header">Route ${routeName}</div>
+                    <div class="vt-row"><span class="vt-label">Direction</span><span>${dirLabel}</span></div>
+                    <div class="vt-row"><span class="vt-label">Vehicle #</span><span>${v.vehicleId}</span></div>
+                    <div class="vt-row"><span class="vt-label">Trip ID</span><span style="font-size:10px">${v.tripId.slice(0, 20)}</span></div>
+                    <div class="vt-row"><span class="vt-label">Status</span><span>${statusLabel}</span></div>
+                    <div class="vt-row"><span class="vt-label">Speed</span><span>${speedMph} mph</span></div>
+                    <div class="vt-row"><span class="vt-label">Bearing</span><span>${Math.round(v.bearing)}°</span></div>
+                </div>
+            `, { direction: 'top', offset: [0, -12], className: 'vehicle-tooltip-container' });
+            marker.addTo(vehiclesLayer);
         }
     } catch (err) {
         console.error('Failed to update vehicles:', err);
@@ -775,10 +802,6 @@ function bindEvents() {
     // Activate detour
     document.getElementById('activate-detour')!.addEventListener('click', activateDetour);
 
-    // Temp stop modal
-    document.getElementById('confirm-temp-stop')!.addEventListener('click', confirmTempStop);
-    document.getElementById('cancel-temp-stop')!.addEventListener('click', hideTempStopModal);
-
     // Toggle vehicles
     document.getElementById('btn-toggle-vehicles')!.addEventListener('click', toggleVehicles);
 }
@@ -788,6 +811,106 @@ function setDirection(dir: number) {
     document.getElementById('dir-btn-0')!.classList.toggle('active', dir === 0);
     document.getElementById('dir-btn-1')!.classList.toggle('active', dir === 1);
     loadRouteDisplay();
+}
+
+// ─── Map Tooltip Popup ───
+
+let mapTooltipTimer: ReturnType<typeof setTimeout> | null = null;
+let mapTooltipPopup: any = null;
+
+/**
+ * Show a temporary tooltip popup on the map at the given coordinates.
+ * Auto-removes after `durationMs` milliseconds.
+ */
+function showMapTooltip(latlng: [number, number], message: string, durationMs: number = 3000) {
+    if (mapTooltipPopup) {
+        map.closePopup(mapTooltipPopup);
+    }
+    if (mapTooltipTimer) clearTimeout(mapTooltipTimer);
+
+    mapTooltipPopup = L.popup({
+        closeButton: false,
+        className: 'map-instruction-popup',
+        autoPan: false,
+        offset: [0, -15],
+    })
+        .setLatLng(latlng)
+        .setContent(`<div class="map-tip">${message}</div>`)
+        .openOn(map);
+
+    mapTooltipTimer = setTimeout(() => {
+        if (mapTooltipPopup) map.closePopup(mapTooltipPopup);
+        mapTooltipPopup = null;
+    }, durationMs);
+}
+
+// ─── Temp Stop (non-blocking popup) ───
+
+let tempStopPopup: any = null;
+
+function showTempStopModal() {
+    if (!pendingTempStopLatLng) return;
+    // Close any existing popup
+    hideTempStopModal();
+
+    const [lat, lng] = pendingTempStopLatLng;
+    const suggestedName = `Temp Stop ${tempStopCounter + 1}`;
+
+    tempStopPopup = L.popup({
+        closeButton: true,
+        className: 'temp-stop-popup',
+        maxWidth: 260,
+        minWidth: 220,
+        autoPan: true,
+        offset: [0, -5],
+    })
+        .setLatLng([lat, lng])
+        .setContent(`
+            <div class="temp-stop-form">
+                <div class="temp-stop-title">📍 Add Temporary Stop</div>
+                <input type="text" id="popup-temp-name" class="temp-stop-input" 
+                       value="${suggestedName}" placeholder="Stop name..." />
+                <div class="temp-stop-actions">
+                    <button class="temp-stop-btn temp-stop-btn-cancel" id="popup-temp-cancel">Skip</button>
+                    <button class="temp-stop-btn temp-stop-btn-confirm" id="popup-temp-confirm">Add Stop</button>
+                </div>
+            </div>
+        `)
+        .openOn(map);
+
+    // Bind events after popup opens
+    setTimeout(() => {
+        const input = document.getElementById('popup-temp-name') as HTMLInputElement;
+        if (input) {
+            input.focus();
+            input.select();
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') confirmTempStop();
+                if (e.key === 'Escape') hideTempStopModal();
+            });
+        }
+        document.getElementById('popup-temp-confirm')?.addEventListener('click', confirmTempStop);
+        document.getElementById('popup-temp-cancel')?.addEventListener('click', hideTempStopModal);
+    }, 50);
+}
+
+function hideTempStopModal() {
+    if (tempStopPopup) {
+        map.closePopup(tempStopPopup);
+        tempStopPopup = null;
+    }
+    pendingTempStopLatLng = null;
+}
+
+function confirmTempStop() {
+    if (!pendingTempStopLatLng) return;
+    const input = document.getElementById('popup-temp-name') as HTMLInputElement;
+    const name = input?.value?.trim() || `Temp Stop ${++tempStopCounter}`;
+    const [lat, lng] = pendingTempStopLatLng;
+    const stopId = `TEMP_${Date.now()}_${tempStopCounter}`;
+
+    addReplacementStop(stopId, name, lat, lng, true);
+    hideTempStopModal();
 }
 
 // ─── Utilities ───
