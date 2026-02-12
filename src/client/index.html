@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transit Detour Manager — Chicago Transit</title>
+  <meta name="description" content="Real-time bus detour management system for Chicago Transit Authority">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header Bar -->
+    <header id="header">
+      <div class="header-brand">
+        <div class="header-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2C8 2 5 5 5 8v7l-2 3h18l-2-3V8c0-3-3-6-7-6z"/>
+            <path d="M9 21h6"/>
+          </svg>
+        </div>
+        <div>
+          <h1>Transit Detour Manager</h1>
+          <span class="header-subtitle">Chicago Transit Authority — Bus Operations</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <div class="status-indicator" id="status-indicator">
+          <span class="status-dot"></span>
+          <span id="status-text">Connecting...</span>
+        </div>
+        <div class="status-stats">
+          <span id="stat-vehicles">— vehicles</span>
+          <span class="stat-divider">|</span>
+          <span id="stat-detours">— detours</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content: Sidebar + Map -->
+    <main id="main">
+      <!-- Sidebar -->
+      <aside id="sidebar">
+        <!-- Route Selector Panel -->
+        <div class="panel" id="route-panel">
+          <div class="panel-header">
+            <h2>Route Selection</h2>
+          </div>
+          <div class="panel-body">
+            <div class="form-group">
+              <label for="route-search">Search Routes</label>
+              <input type="text" id="route-search" placeholder="Type route number or name..." autocomplete="off">
+            </div>
+            <div id="route-list" class="route-list">
+              <div class="loading-spinner">Loading routes...</div>
+            </div>
+            <div class="form-group" id="direction-group" style="display:none">
+              <label>Direction</label>
+              <div class="direction-toggle">
+                <button class="direction-btn active" data-dir="0" id="dir-btn-0">Direction 0</button>
+                <button class="direction-btn" data-dir="1" id="dir-btn-1">Direction 1</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detour Creation Panel -->
+        <div class="panel" id="detour-panel" style="display:none">
+          <div class="panel-header">
+            <h2>Create Detour</h2>
+            <button class="btn-icon" id="close-detour-panel" title="Cancel">✕</button>
+          </div>
+          <div class="panel-body">
+            <div class="detour-steps">
+              <div class="step active" id="step-1-indicator">
+                <span class="step-number">1</span>
+                <span class="step-label">Select diverge stop</span>
+              </div>
+              <div class="step" id="step-2-indicator">
+                <span class="step-number">2</span>
+                <span class="step-label">Trace detour path</span>
+              </div>
+              <div class="step" id="step-3-indicator">
+                <span class="step-number">3</span>
+                <span class="step-label">Select rejoin stop</span>
+              </div>
+              <div class="step" id="step-4-indicator">
+                <span class="step-number">4</span>
+                <span class="step-label">Configure & activate</span>
+              </div>
+            </div>
+
+            <div id="step-instructions" class="step-instructions">
+              Click on a stop where the detour <strong>begins</strong> (diverge point).
+            </div>
+
+            <!-- Replacement Stops List -->
+            <div id="replacement-stops-section" style="display:none">
+              <h3>Replacement Stops</h3>
+              <div id="replacement-stops-list" class="replacement-stops-list"></div>
+              <p class="help-text">Click existing stops or map to add temporary stops along the detour.</p>
+            </div>
+
+            <!-- Detour Config (Step 4) -->
+            <div id="detour-config" style="display:none">
+              <div class="form-group">
+                <label for="detour-description">Description</label>
+                <textarea id="detour-description" rows="2" placeholder="e.g. Water main break on Western Ave between 47th and 51st"></textarea>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="detour-start">Start Time</label>
+                  <input type="datetime-local" id="detour-start">
+                </div>
+                <div class="form-group">
+                  <label for="detour-end">End Time</label>
+                  <input type="datetime-local" id="detour-end">
+                </div>
+              </div>
+              <button class="btn btn-primary btn-lg" id="activate-detour">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M12 2C8 2 5 5 5 8v7l-2 3h18l-2-3V8c0-3-3-6-7-6z"/>
+                </svg>
+                Activate Detour
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Active Detours Panel -->
+        <div class="panel" id="active-detours-panel">
+          <div class="panel-header">
+            <h2>Active Detours</h2>
+            <span class="badge" id="active-detour-count">0</span>
+          </div>
+          <div class="panel-body">
+            <div id="active-detours-list" class="detour-list">
+              <p class="empty-state">No active detours</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Map Container -->
+      <div id="map-container">
+        <div id="map"></div>
+        <!-- Map Controls Overlay -->
+        <div id="map-controls">
+          <button class="map-control-btn" id="btn-create-detour" title="Create new detour" style="display:none">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            New Detour
+          </button>
+          <button class="map-control-btn" id="btn-toggle-vehicles" title="Toggle vehicle display">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="6" width="18" height="12" rx="2"/>
+              <circle cx="7" cy="18" r="1.5"/>
+              <circle cx="17" cy="18" r="1.5"/>
+            </svg>
+            Vehicles
+          </button>
+        </div>
+        <!-- Temporary Stop Modal -->
+        <div id="temp-stop-modal" class="modal" style="display:none">
+          <div class="modal-content">
+            <h3>Create Temporary Stop</h3>
+            <div class="form-group">
+              <label for="temp-stop-name">Stop Name</label>
+              <input type="text" id="temp-stop-name" placeholder="e.g. Western & 49th (Temp)">
+            </div>
+            <div class="modal-actions">
+              <button class="btn btn-secondary" id="cancel-temp-stop">Cancel</button>
+              <button class="btn btn-primary" id="confirm-temp-stop">Add Stop</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
