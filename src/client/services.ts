@@ -6,6 +6,7 @@ export interface RouteInfo {
     route_long_name: string;
     route_color: string;
     route_text_color: string;
+    directions?: { [id: number]: string };
 }
 
 export interface StopInfo {

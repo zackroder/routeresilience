@@ -135,6 +135,7 @@ export async function loadGTFS(): Promise<GTFSData> {
             route_id: t.route_id,
             service_id: t.service_id,
             direction_id: parseInt(t.direction_id) || 0,
+            direction: t.direction || '',
             trip_headsign: t.trip_headsign || '',
             shape_id: t.shape_id || '',
             block_id: t.block_id || '',
@@ -148,6 +149,32 @@ export async function loadGTFS(): Promise<GTFSData> {
             tripsByRoute.set(key, arr);
         }
         arr.push(trip.trip_id);
+    }
+
+    // Populate route directions from trips
+    for (const route of routes.values()) {
+        const counts: { [d: number]: { [name: string]: number } } = { 0: {}, 1: {} };
+
+        for (const dir of [0, 1]) {
+            const tripIds = tripsByRoute.get(`${route.route_id}_${dir}`) || [];
+            // Sample up to 100 trips to determine direction label
+            for (let i = 0; i < Math.min(tripIds.length, 100); i++) {
+                const trip = trips.get(tripIds[i]);
+                if (trip?.direction) {
+                    counts[dir][trip.direction] = (counts[dir][trip.direction] || 0) + 1;
+                }
+            }
+        }
+
+        route.directions = {};
+        for (const dir of [0, 1]) {
+            let best = '';
+            let max = 0;
+            for (const [name, count] of Object.entries(counts[dir])) {
+                if (count > max) { max = count; best = name; }
+            }
+            if (best) route.directions[dir] = best;
+        }
     }
 
     // Parse stops
