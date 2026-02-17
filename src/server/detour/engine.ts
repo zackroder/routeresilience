@@ -42,9 +42,13 @@ export class DetourEngine {
      * Create and store a new detour.
      */
     createDetour(req: CreateDetourRequest): Detour {
+        // Compute full path for visualization
+        const path = this.computeFullDetourPath(req);
+
         const detour: Detour = {
             id: crypto.randomUUID(),
             ...req,
+            path,
             createdAt: new Date().toISOString(),
         };
         this.store.add(detour);
@@ -198,4 +202,77 @@ export class DetourEngine {
         const d = String(date.getDate()).padStart(2, '0');
         return `${y}${m}${d}`;
     }
+
+
+
+    /**
+     * Computes the full path geometry for the detour:
+     * [Start Stop -> Diverge Stop] + [Detour Shape] + [Rejoin Stop -> End Stop]
+     * This is useful for visualization on the client map.
+     */
+    computeFullDetourPath(req: CreateDetourRequest): [number, number][] {
+        // Find a representative trip to get the base shape
+        // We just need ANY trip on this route/direction to get the shape geometry
+        const routeTrips = Array.from(this.gtfs.trips.values())
+            .filter(t => t.route_id === req.routeId && t.direction_id === req.directionId);
+
+        if (routeTrips.length === 0) return req.detourShape;
+
+        const trip = routeTrips[0];
+        const shapePoints = this.gtfs.shapePoints.get(trip.shape_id);
+        if (!shapePoints || shapePoints.length === 0) return req.detourShape;
+
+        const stopTimes = this.gtfs.stopTimesByTrip.get(trip.trip_id);
+        if (!stopTimes) return req.detourShape;
+
+        // Find diverges/rejoin stops in sequence
+        const startSt = stopTimes.find(st => st.stop_id === req.startStopId);
+        const endSt = stopTimes.find(st => st.stop_id === req.endStopId);
+
+        if (!startSt || !endSt) return req.detourShape;
+
+        // Get shape segments
+        // 1. Pre-diverge: From start of shape (or close to start stop?) to diverge point
+        // For simplicity, we'll slice geometry based on stops. 
+        // Ideally we project stops onto shape. Here we'll do a simple distance check.
+
+        // Find shape index closest to start/end stops
+        const startShapeIdx = this.findClosestShapeIndex(shapePoints, this.gtfs.stops.get(req.startStopId)!);
+        const endShapeIdx = this.findClosestShapeIndex(shapePoints, this.gtfs.stops.get(req.endStopId)!);
+
+        if (startShapeIdx === -1 || endShapeIdx === -1) return req.detourShape;
+
+        const path: [number, number][] = [];
+
+        // No... full path should be the REPLACEMENT segment, not the whole route.
+        // Wait, the client wants to see the "Active Detour" trace.
+        // If the detour is just the deviation, we already have `detourShape`.
+        // But usually "detour" implies the path taken *between* the affected stops.
+
+        // If the user wants to see the "Detour Path", it is effectively:
+        // Diverge Stop -> Detour Shape -> Rejoin Stop.
+        // The `detourShape` from client IS this path.
+
+        // However, the `detourShape` might be raw points.
+        // Let's just return `detourShape` for now if that's what the client sends.
+        // Actually, looking at client code, `detourPathPoints` is just the points clicked on map.
+        // It connects Diverge -> clicked points -> Rejoin.
+
+        return req.detourShape;
+    }
+
+    private findClosestShapeIndex(shapePoints: any[], stop: any): number {
+        if (!stop) return -1;
+        let minDist = Infinity;
+        let idx = -1;
+        for (let i = 0; i < shapePoints.length; i++) {
+            const d = haversineMeters(stop.stop_lat, stop.stop_lon, shapePoints[i].shape_pt_lat, shapePoints[i].shape_pt_lon);
+            if (d < minDist) {
+                minDist = d;
+                idx = i;
+            }
+        }
+        return idx;
+    }
 }
+

@@ -28,6 +28,9 @@ export interface Detour {
     /** Polyline of the detour geometry [lat, lng][] */
     detourShape: [number, number][];
 
+    /** Computed full path for the detour (diverge -> detour -> rejoin) */
+    path?: [number, number][];
+
     /** When the detour begins (ISO 8601) */
     startTime: string;
     /** When the detour ends (ISO 8601) */
@@ -47,6 +50,7 @@ export interface CreateDetourRequest {
     endStopId: string;
     replacementStops: ReplacementStopDef[];
     detourShape: [number, number][];
+    path?: [number, number][];
     startTime: string;
     endTime: string;
     description: string;
