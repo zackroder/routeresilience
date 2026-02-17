@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { GTFSData } from '../gtfs/types.js';
-import { findNearbyStops } from '../gtfs/loader.js';
+import { findNearbyStops, findStopsInBounds } from '../gtfs/loader.js';
 import { DetourEngine } from '../detour/engine.js';
 import { DetourStore } from '../detour/store.js';
 import { CreateDetourRequest } from '../detour/types.js';
@@ -66,7 +66,13 @@ export function createApiRouter(
         const tripIds = gtfs.tripsByRoute.get(key) || [];
 
         // Collect all unique shapes for this route+direction
-        const shapesMap = new Map<string, { shape_id: string; points: { lat: number; lon: number }[]; totalDistance: number; tripCount: number }>();
+        const shapesMap = new Map<string, {
+            shape_id: string;
+            points: { lat: number; lon: number }[];
+            totalDistance: number;
+            tripCount: number;
+            representativeTripId: string;
+        }>();
         for (const tripId of tripIds) {
             const trip = gtfs.trips.get(tripId);
             if (!trip || !trip.shape_id) continue;
@@ -86,7 +92,10 @@ export function createApiRouter(
                 const dy = (b.shape_pt_lon - a.shape_pt_lon) * 111320 * Math.cos(a.shape_pt_lat * Math.PI / 180);
                 totalDistance += Math.sqrt(dx * dx + dy * dy);
             }
-            shapesMap.set(trip.shape_id, { shape_id: trip.shape_id, points, totalDistance, tripCount: 1 });
+            shapesMap.set(trip.shape_id, {
+                shape_id: trip.shape_id, points, totalDistance, tripCount: 1,
+                representativeTripId: tripId,
+            });
         }
 
         // Sort by total distance descending (longest pattern first)
@@ -94,17 +103,28 @@ export function createApiRouter(
             .sort((a, b) => b.totalDistance - a.totalDistance);
 
         if (patterns.length > 0) {
-            // Default response: the longest pattern (backward compatible)
-            res.json({
-                shape_id: patterns[0].shape_id,
-                points: patterns[0].points,
-                patterns: patterns.map((p, i) => ({
+            // Build enriched pattern info with first/last stop names and stop IDs
+            const enrichedPatterns = patterns.map((p, i) => {
+                const stopTimes = gtfs.stopTimesByTrip.get(p.representativeTripId) || [];
+                const stopIds = stopTimes.map(st => st.stop_id);
+                const firstStop = stopTimes.length > 0 ? gtfs.stops.get(stopTimes[0].stop_id) : null;
+                const lastStop = stopTimes.length > 0 ? gtfs.stops.get(stopTimes[stopTimes.length - 1].stop_id) : null;
+                return {
                     shape_id: p.shape_id,
                     pointCount: p.points.length,
                     totalDistance: Math.round(p.totalDistance),
                     tripCount: p.tripCount,
                     isDefault: i === 0,
-                })),
+                    firstStopName: firstStop?.stop_name || 'Unknown',
+                    lastStopName: lastStop?.stop_name || 'Unknown',
+                    stopIds,
+                };
+            });
+
+            res.json({
+                shape_id: patterns[0].shape_id,
+                points: patterns[0].points,
+                patterns: enrichedPatterns,
             });
         } else {
             res.json({ shape_id: null, points: [], patterns: [] });
@@ -161,6 +181,27 @@ export function createApiRouter(
         }
 
         const stops = findNearbyStops(gtfs, lat, lon, radius);
+        res.json(stops.map(s => ({
+            stop_id: s.stop_id,
+            stop_name: s.stop_name,
+            stop_lat: s.stop_lat,
+            stop_lon: s.stop_lon,
+        })));
+    });
+
+    /** Find stops in bounds */
+    router.get('/stops/bounds', (req: Request, res: Response) => {
+        const minLat = parseFloat(req.query.minLat as string);
+        const minLon = parseFloat(req.query.minLon as string);
+        const maxLat = parseFloat(req.query.maxLat as string);
+        const maxLon = parseFloat(req.query.maxLon as string);
+
+        if (isNaN(minLat) || isNaN(minLon) || isNaN(maxLat) || isNaN(maxLon)) {
+            res.status(400).json({ error: 'minLat, minLon, maxLat, maxLon are required' });
+            return;
+        }
+
+        const stops = findStopsInBounds(gtfs, minLat, minLon, maxLat, maxLon);
         res.json(stops.map(s => ({
             stop_id: s.stop_id,
             stop_name: s.stop_name,

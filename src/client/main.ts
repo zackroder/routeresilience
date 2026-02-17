@@ -10,6 +10,8 @@ let selectedDirection = 0;
 let allRoutes: RouteInfo[] = [];
 
 // Map layers
+// Map layers
+let tileLayer: any = null;
 let routeShapeLayer: any = null;
 let stopsLayer: any = null;
 let detourShapeLayer: any = null;
@@ -17,9 +19,13 @@ let replacementStopsLayer: any = null;
 let vehiclesLayer: any = null;
 let nearbyStopsLayer: any = null;
 let activeDetoursLayer: any = null;
+let candidateStopsLayer: any = null;
+
+// Theme
+let isLightTheme = false;
 
 // Detour creation state
-type DetourStep = 'idle' | 'select-diverge' | 'trace-path' | 'select-rejoin' | 'configure';
+type DetourStep = 'idle' | 'select-diverge' | 'trace-path' | 'select-rejoin' | 'add-stops' | 'configure';
 let detourStep: DetourStep = 'idle';
 let divergeStopId: string | null = null;
 let divergeStop: StopInfo | null = null;
@@ -77,8 +83,8 @@ function initMap() {
         zoomControl: true,
     });
 
-    // Dark map tiles
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    // Map tiles
+    tileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: 'abcd',
         maxZoom: 19,
@@ -87,9 +93,10 @@ function initMap() {
     // Initialize layer groups
     routeShapeLayer = L.layerGroup().addTo(map);
     stopsLayer = L.layerGroup().addTo(map);
-    activeDetoursLayer = L.layerGroup().addTo(map);
+    activeDetoursLayer = L.featureGroup().addTo(map); // FeatureGroup for getBounds()
     detourShapeLayer = L.layerGroup().addTo(map);
     replacementStopsLayer = L.layerGroup().addTo(map);
+    candidateStopsLayer = L.layerGroup().addTo(map);
     vehiclesLayer = L.layerGroup().addTo(map);
     nearbyStopsLayer = L.layerGroup().addTo(map);
 
@@ -233,6 +240,8 @@ function cancelDetourCreation() {
     detourStep = 'idle';
     segmentBoundaries = [];
     document.getElementById('detour-panel')!.style.display = 'none';
+    document.getElementById('affected-patterns-section')!.style.display = 'none';
+    document.getElementById('create-opposite-dir')!.style.display = 'none';
     detourShapeLayer.clearLayers();
     replacementStopsLayer.clearLayers();
     nearbyStopsLayer.clearLayers();
@@ -260,18 +269,19 @@ function onStopClick(stop: StopInfo) {
     } else if (detourStep === 'select-rejoin') {
         finalizeRejoinStop(stop);
     } else if (detourStep === 'trace-path') {
-        // If we have traced at least 2 points, treat clicking a route stop as the rejoin point
-        if (detourPathPoints.length >= 2) {
-            // Check if this stop is AFTER the diverge stop in the sequence
-            const divergeIdx = currentRouteStops.findIndex(s => s.stop_id === divergeStopId);
-            const thisIdx = currentRouteStops.findIndex(s => s.stop_id === stop.stop_id);
-            if (thisIdx > divergeIdx) {
-                // Auto-rejoin: snap the detour line to this stop and go to configure
-                finalizeRejoinStop(stop);
-                return;
-            }
+        // In trace-path, clicking a route stop is ONLY for setting it as rejoin
+        const divergeIdx = currentRouteStops.findIndex(s => s.stop_id === divergeStopId);
+        const thisIdx = currentRouteStops.findIndex(s => s.stop_id === stop.stop_id);
+
+        if (divergeIdx !== -1 && thisIdx > divergeIdx) {
+            // Check if this is a valid downstream stop
+            showRejoinOptionsPopup(stop);
+            return;
         }
-        // Otherwise treat as a replacement stop along the detour
+        // Otherwise ignore or show tooltip
+        showMapTooltip([stop.stop_lat, stop.stop_lon], 'Finish tracing or click a downstream stop to rejoin.', 2000);
+    } else if (detourStep === 'add-stops') {
+        // Add as replacement stop
         addReplacementStop(stop.stop_id, stop.stop_name, stop.stop_lat, stop.stop_lon, false);
     }
 }
@@ -302,67 +312,101 @@ async function finalizeRejoinStop(stop: StopInfo) {
     }).bindTooltip('REJOIN: ' + stop.stop_name, { permanent: true, direction: 'top' })
         .addTo(detourShapeLayer);
 
-    detourStep = 'configure';
+    detourStep = 'add-stops';
     updateDetourStepUI();
-    showMapTooltip([stop.stop_lat, stop.stop_lon], '✔ Rejoin set! Configure detour details in the sidebar.', 3000);
+    showMapTooltip([stop.stop_lat, stop.stop_lon], '✔ Rejoin set! Now add replacement stops if needed.', 3000);
 }
 
 async function onMapClick(e: any) {
-    if (detourStep !== 'trace-path') return;
+    if (detourStep === 'trace-path') {
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
 
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
+        // Check if click is near existing detour path (within 50m)
+        const nearPath = detourPathPoints.length >= 2 && distanceToPolyline(lat, lng) < 50;
 
-    // Snap to road using OSRM and add all snapped points
-    if (detourPathPoints.length > 0) {
-        const prev = detourPathPoints[detourPathPoints.length - 1];
-        const snappedSegment = await snapToRoad(prev[0], prev[1], lat, lng);
-        if (snappedSegment.length > 0) {
-            // Add all snapped points (skip first since it duplicates previous end)
-            for (let i = 1; i < snappedSegment.length; i++) {
-                detourPathPoints.push(snappedSegment[i]);
+        if (!nearPath) {
+            // Far from path: extend the detour polyline via OSRM snap
+            if (detourPathPoints.length > 0) {
+                const prev = detourPathPoints[detourPathPoints.length - 1];
+                const snappedSegment = await snapToRoad(prev[0], prev[1], lat, lng);
+                if (snappedSegment.length > 0) {
+                    for (let i = 1; i < snappedSegment.length; i++) {
+                        detourPathPoints.push(snappedSegment[i]);
+                    }
+                } else {
+                    detourPathPoints.push([lat, lng]);
+                }
+            } else {
+                detourPathPoints.push([lat, lng]);
             }
-        } else {
-            // Fallback: straight line
-            detourPathPoints.push([lat, lng]);
+            redrawDetourPath();
         }
-    } else {
-        detourPathPoints.push([lat, lng]);
-    }
-    redrawDetourPath();
-
-    // Check for nearby existing stops near the clicked point
-    try {
-        const nearbyStops = await api.getNearbyStops(lat, lng, 100);
-        nearbyStopsLayer.clearLayers();
-
-        if (nearbyStops.length > 0) {
-            // Show nearby stops user could snap to
-            for (const stop of nearbyStops) {
-                const marker = L.circleMarker([stop.stop_lat, stop.stop_lon], {
-                    radius: 7,
-                    fillColor: '#f59e0b',
-                    color: '#ffffff',
-                    weight: 2,
-                    fillOpacity: 0.9,
-                });
-                marker.bindTooltip(`📍 ${stop.stop_name} (click to add)`, { direction: 'top' });
-                marker.on('click', () => {
-                    addReplacementStop(stop.stop_id, stop.stop_name, stop.stop_lat, stop.stop_lon, false);
-                    nearbyStopsLayer.clearLayers();
-                });
-                marker.addTo(nearbyStopsLayer);
-            }
-        } else {
-            // Offer to create a temporary stop
-            pendingTempStopLatLng = [lat, lng];
-            showTempStopModal();
-        }
-    } catch (err) {
-        // If nearby search fails, just offer temp stop
+    } else if (detourStep === 'add-stops') {
+        // Add temp stop
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
         pendingTempStopLatLng = [lat, lng];
         showTempStopModal();
     }
+}
+
+/**
+ * Show a popup at a route stop offering "Auto-route" or "Keep current path"
+ * so the user controls how the detour reaches the rejoin stop.
+ */
+function showRejoinOptionsPopup(stop: StopInfo) {
+    const popup = L.popup({
+        closeButton: true,
+        className: 'rejoin-options-popup',
+        maxWidth: 240,
+        autoPan: true,
+        offset: [0, -5],
+    })
+        .setLatLng([stop.stop_lat, stop.stop_lon])
+        .setContent(`
+            <div class="rejoin-options">
+                <div class="rejoin-title">Set <strong>${stop.stop_name}</strong> as rejoin?</div>
+                <div class="rejoin-btns">
+                    <button class="rejoin-btn rejoin-btn-auto" id="rejoin-auto">🛣️ Snap via streets</button>
+                    <button class="rejoin-btn rejoin-btn-direct" id="rejoin-direct">📏 Connect directly</button>
+                </div>
+            </div>
+        `)
+        .openOn(map);
+
+    setTimeout(() => {
+        document.getElementById('rejoin-auto')?.addEventListener('click', () => {
+            map.closePopup(popup);
+            finalizeRejoinStop(stop);
+        });
+        document.getElementById('rejoin-direct')?.addEventListener('click', () => {
+            map.closePopup(popup);
+            finalizeRejoinStopKeepPath(stop);
+        });
+    }, 50);
+}
+
+/**
+ * Set the rejoin stop WITHOUT adding any OSRM routing — keep the path as-is.
+ */
+function finalizeRejoinStopKeepPath(stop: StopInfo) {
+    rejoinStopId = stop.stop_id;
+    rejoinStop = stop;
+
+    // Highlight rejoin stop
+    L.circleMarker([stop.stop_lat, stop.stop_lon], {
+        radius: 8,
+        fillColor: '#10b981',
+        color: '#ffffff',
+        weight: 2,
+        fillOpacity: 1,
+    }).bindTooltip('REJOIN: ' + stop.stop_name, { permanent: true, direction: 'top' })
+        .addTo(detourShapeLayer);
+
+    detourStep = 'add-stops';
+    updateDetourStepUI();
+    showMapTooltip([stop.stop_lat, stop.stop_lon], '✔ Rejoin set! Now add replacement stops if needed.', 3000);
 }
 
 function onMapRightClick(e: any) {
@@ -419,6 +463,15 @@ async function snapToRoad(lat1: number, lon1: number, lat2: number, lon2: number
 }
 
 function addReplacementStop(stopId: string, name: string, lat: number, lon: number, isTemporary: boolean) {
+    // Toggle: if stop already exists, remove it instead of adding a duplicate
+    const existingIdx = replacementStops.findIndex(s => s.stopId === stopId);
+    if (existingIdx !== -1) {
+        replacementStops.splice(existingIdx, 1);
+        rebuildReplacementStopMarkers();
+        renderReplacementStopsList();
+        return;
+    }
+
     // Estimate travel time from previous point
     let travelTime = 60; // default 60s
     if (detourPathPoints.length > 0) {
@@ -446,6 +499,67 @@ function addReplacementStop(stopId: string, name: string, lat: number, lon: numb
     marker.addTo(replacementStopsLayer);
 
     renderReplacementStopsList();
+}
+
+/**
+ * Show a non-blocking Leaflet popup for creating a temporary stop.
+ */
+function showTempStopPopup(lat: number, lng: number) {
+    const popup = L.popup({
+        closeButton: true,
+        className: 'temp-stop-popup',
+        maxWidth: 240,
+    })
+        .setLatLng([lat, lng])
+        .setContent(`
+        <div class="temp-stop-form">
+            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text-primary)">Create Temporary Stop</div>
+            <input type="text" id="temp-stop-name-input" placeholder="Stop name" 
+                   style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-surface);color:var(--text-primary);font-family:var(--font-family);font-size:12px;margin-bottom:6px;box-sizing:border-box" />
+            <div style="display:flex;gap:4px">
+                <button id="temp-stop-confirm-btn" class="btn btn-primary btn-sm" style="flex:1">Add Stop</button>
+                <button id="temp-stop-cancel-btn" class="btn btn-secondary btn-sm" style="flex:1">Cancel</button>
+            </div>
+        </div>
+    `)
+        .openOn(map);
+
+    setTimeout(() => {
+        const nameInput = document.getElementById('temp-stop-name-input') as HTMLInputElement;
+        const confirmBtn = document.getElementById('temp-stop-confirm-btn');
+        const cancelBtn = document.getElementById('temp-stop-cancel-btn');
+
+        if (nameInput) nameInput.focus();
+
+        confirmBtn?.addEventListener('click', () => {
+            const name = nameInput?.value.trim() || `Temp Stop ${++tempStopCounter}`;
+            const stopId = `temp_${Date.now()}`;
+            addReplacementStop(stopId, name, lat, lng, true);
+            map.closePopup(popup);
+        });
+
+        cancelBtn?.addEventListener('click', () => {
+            map.closePopup(popup);
+        });
+
+        nameInput?.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.key === 'Enter') confirmBtn?.click();
+        });
+    }, 50);
+}
+
+function rebuildReplacementStopMarkers() {
+    replacementStopsLayer.clearLayers();
+    for (const s of replacementStops) {
+        L.circleMarker([s.lat, s.lon], {
+            radius: 7,
+            fillColor: s.isTemporary ? '#f59e0b' : '#3b82f6',
+            color: '#ffffff',
+            weight: 2,
+            fillOpacity: 1,
+        }).bindTooltip(s.stopName + (s.isTemporary ? ' (temp)' : ''), { direction: 'top' })
+            .addTo(replacementStopsLayer);
+    }
 }
 
 function renderReplacementStopsList() {
@@ -488,45 +602,194 @@ function redrawDetourPath() {
 }
 
 function updateDetourStepUI() {
-    const steps = ['select-diverge', 'trace-path', 'select-rejoin', 'configure'];
+    const steps: DetourStep[] = ['select-diverge', 'trace-path', 'select-rejoin', 'add-stops', 'configure'];
     const currentIdx = steps.indexOf(detourStep);
 
-    for (let i = 0; i < 4; i++) {
-        const indicator = document.getElementById(`step-${i + 1}-indicator`)!;
+    for (let i = 0; i < 5; i++) {
+        const indicator = document.getElementById(`step-${i + 1}-indicator`);
+        if (!indicator) continue;
         indicator.classList.remove('active', 'completed');
         if (i < currentIdx) indicator.classList.add('completed');
         if (i === currentIdx) indicator.classList.add('active');
     }
 
     const instructions = document.getElementById('step-instructions')!;
+    const replacement = document.getElementById('replacement-stops-section')!;
+    const backBtn = document.getElementById('btn-back-header')!;
+
+    // Re-enable activate button (in case it was disabled)
+    const activateBtn = document.getElementById('activate-detour') as HTMLButtonElement;
+    if (activateBtn) { activateBtn.disabled = false; activateBtn.textContent = 'Activate Detour'; }
+
+    // Header Back Button Logic
+    backBtn.style.display = (detourStep === 'idle' || detourStep === 'select-diverge') ? 'none' : 'block';
+
+    // Determine back target
+    let backTarget: DetourStep | null = null;
+    if (detourStep === 'trace-path') backTarget = 'select-diverge';
+    else if (detourStep === 'select-rejoin') backTarget = 'trace-path';
+    else if (detourStep === 'add-stops') backTarget = 'select-rejoin';
+    else if (detourStep === 'configure') backTarget = 'add-stops';
+
+    // Clone and replace to remove old listeners
+    const newBackBtn = backBtn.cloneNode(true);
+    backBtn.parentNode!.replaceChild(newBackBtn, backBtn);
+    if (backTarget) {
+        newBackBtn.addEventListener('click', () => goBackStep(backTarget!));
+    }
+
     switch (detourStep) {
         case 'select-diverge':
             instructions.innerHTML = 'Click on a stop where the detour <strong>begins</strong> (diverge point).';
             document.getElementById('detour-config')!.style.display = 'none';
+            replacement.style.display = 'none';
+            candidateStopsLayer.clearLayers();
             break;
         case 'trace-path':
             instructions.innerHTML = 'Click the map to trace the detour path <em>(snaps to roads)</em>. Click a <strong>route stop</strong> to set the rejoin point, or right-click to undo.';
-            // Show undo and set-rejoin buttons
-            instructions.innerHTML += '<br><br><div style="display:flex;gap:6px"><button class="btn btn-secondary btn-sm" id="btn-undo-segment">↩ Undo</button><button class="btn btn-secondary btn-sm" id="btn-set-rejoin">Set Rejoin Point →</button></div>';
+            instructions.innerHTML += '<br><br><div style="display:flex;gap:6px;flex-wrap:wrap">' +
+                '<button class="btn btn-secondary btn-sm" id="btn-back-to-diverge">← Back</button>' +
+                '<button class="btn btn-secondary btn-sm" id="btn-undo-segment">↩ Undo</button></div>';
+            document.getElementById('btn-back-to-diverge')?.addEventListener('click', () => goBackStep('select-diverge'));
             document.getElementById('btn-undo-segment')?.addEventListener('click', undoLastSegment);
-            document.getElementById('btn-set-rejoin')?.addEventListener('click', () => {
-                detourStep = 'select-rejoin';
+            replacement.style.display = 'block';
+            candidateStopsLayer.clearLayers();
+            break;
+        case 'select-rejoin':
+            // Logic integrated into click handlers of step 2, but just in case
+            instructions.innerHTML = 'Review the rejoin stop.';
+            replacement.style.display = 'block';
+            break;
+        case 'add-stops':
+            instructions.innerHTML = 'Add stops along the detour. Click <strong style="color:#f59e0b">orange candidates</strong> to add, or click empty map for temp stops.';
+            document.getElementById('detour-config')!.style.display = 'none';
+            replacement.style.display = 'block';
+            findCandidateStops();
+            instructions.innerHTML += '<br><br><button class="btn btn-primary btn-sm" id="btn-proceed-config">Done Adding Stops →</button>';
+            document.getElementById('btn-proceed-config')?.addEventListener('click', () => {
+                detourStep = 'configure';
                 updateDetourStepUI();
             });
             break;
-        case 'select-rejoin':
-            instructions.innerHTML = 'Click on a stop where the detour <strong>ends</strong> (rejoin point).';
-            break;
         case 'configure':
-            instructions.innerHTML = 'Configure the detour details and activate when ready.';
+            instructions.innerHTML = 'Review details, set times, and activate.' +
+                '<br><br><button class="btn btn-secondary btn-sm" id="btn-back-to-stops">← Back to stops</button>';
+            document.getElementById('btn-back-to-stops')?.addEventListener('click', () => goBackStep('add-stops'));
             document.getElementById('detour-config')!.style.display = 'block';
-            // Set default start time to now, end time to 4 hours from now
+            replacement.style.display = 'block';
+            candidateStopsLayer.clearLayers();
+
+            // Set default times if empty
             const now = new Date();
-            const later = new Date(now.getTime() + 4 * 60 * 60 * 1000);
-            (document.getElementById('detour-start') as HTMLInputElement).value = toLocalISO(now);
-            (document.getElementById('detour-end') as HTMLInputElement).value = toLocalISO(later);
+            const later = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours
+            const startInput = document.getElementById('detour-start') as HTMLInputElement;
+            const endInput = document.getElementById('detour-end') as HTMLInputElement;
+            if (!startInput.value) startInput.value = toLocalISO(now);
+            if (!endInput.value) endInput.value = toLocalISO(later);
+
+            showAffectedPatterns();
             break;
     }
+}
+
+async function findCandidateStops() {
+    candidateStopsLayer.clearLayers();
+    if (detourPathPoints.length < 2) return;
+
+    // Bounds
+    let minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
+    for (const [lat, lon] of detourPathPoints) {
+        minLat = Math.min(minLat, lat); minLon = Math.min(minLon, lon);
+        maxLat = Math.max(maxLat, lat); maxLon = Math.max(maxLon, lon);
+    }
+    const pad = 0.005; // ~500m buffer for query
+
+    try {
+        const stops = await api.getStopsInBounds(minLat - pad, minLon - pad, maxLat + pad, maxLon + pad);
+
+        for (const stop of stops) {
+            // Filter 1: Must be effectively close to the line (buffer 50m)
+            const dist = distanceToPolyline(stop.stop_lat, stop.stop_lon);
+            if (dist > 50) continue;
+
+            // Filter 2: Skip stops already in replacement list
+            if (replacementStops.some(s => s.stopId === stop.stop_id)) continue;
+
+            // Filter 3: Skip diverge/rejoin stops
+            if (stop.stop_id === divergeStopId || stop.stop_id === rejoinStopId) continue;
+
+            // Render
+            const marker = L.circleMarker([stop.stop_lat, stop.stop_lon], {
+                radius: 6,
+                fillColor: '#f59e0b',
+                color: '#ffffff',
+                weight: 1.5,
+                fillOpacity: 0.9,
+                className: 'candidate-stop-marker'
+            });
+            marker.bindTooltip(`Click to add: ${stop.stop_name}`, { direction: 'top', offset: [0, -5] });
+            marker.on('click', () => {
+                addReplacementStop(stop.stop_id, stop.stop_name, stop.stop_lat, stop.stop_lon, false);
+                candidateStopsLayer.removeLayer(marker);
+            });
+            marker.addTo(candidateStopsLayer);
+        }
+    } catch (err) {
+        console.error('Failed to find candidates:', err);
+    }
+}
+
+/**
+ * Navigate back to a previous step in the detour creation wizard.
+ */
+function goBackStep(targetStep: DetourStep) {
+    if (targetStep === 'select-diverge') {
+        const confirmReset = confirm('Going back to start will clear the entire detour. Are you sure?');
+        if (!confirmReset) return;
+
+        // Reset everything
+        divergeStopId = null;
+        divergeStop = null;
+        rejoinStopId = null;
+        rejoinStop = null;
+        detourPathPoints = [];
+        replacementStops = [];
+        detourShapeLayer.clearLayers();
+        replacementStopsLayer.clearLayers();
+        candidateStopsLayer.clearLayers();
+        detourStep = 'idle';
+        startDetourCreation();
+        return;
+    } else if (targetStep === 'trace-path') {
+        // Keep the path but clear the rejoin
+        rejoinStopId = null;
+        rejoinStop = null;
+        candidateStopsLayer.clearLayers();
+
+        document.getElementById('detour-config')!.style.display = 'none';
+
+        // Remove rejoin highlight marker (green) - recreate diverge marker only
+        detourShapeLayer.clearLayers();
+        if (divergeStop) {
+            L.circleMarker([divergeStop.stop_lat, divergeStop.stop_lon], {
+                radius: 8,
+                fillColor: '#ef4444',
+                color: '#ffffff',
+                weight: 2,
+                fillOpacity: 1,
+            }).bindTooltip('DIVERGE: ' + divergeStop.stop_name, { permanent: true, direction: 'top' })
+                .addTo(detourShapeLayer);
+        }
+        redrawDetourPath();
+    } else if (targetStep === 'select-rejoin') {
+        // Coming back from add-stops
+        candidateStopsLayer.clearLayers();
+        // Keep replacement stops? Maybe. Or clear them since we are "going back"?
+        // Let's keep them in case accidental back
+    }
+
+    detourStep = targetStep;
+    updateDetourStepUI();
 }
 
 
@@ -536,16 +799,29 @@ function updateDetourStepUI() {
 async function activateDetour() {
     if (!selectedRoute || !divergeStopId || !rejoinStopId) return;
 
+    // Disable button to prevent duplicates
+    const activateBtn = document.getElementById('activate-detour') as HTMLButtonElement;
+    activateBtn.disabled = true;
+    activateBtn.textContent = 'Activating...';
+
     const description = (document.getElementById('detour-description') as HTMLTextAreaElement).value;
     const startTime = (document.getElementById('detour-start') as HTMLInputElement).value;
     const endTime = (document.getElementById('detour-end') as HTMLInputElement).value;
 
     if (!startTime || !endTime) {
         alert('Please set start and end times.');
+        activateBtn.disabled = false;
+        activateBtn.textContent = 'Activate Detour';
         return;
     }
 
     try {
+        const savedRoute = selectedRoute;
+        const savedDirection = selectedDirection;
+        const savedDescription = description;
+        const savedStartTime = startTime;
+        const savedEndTime = endTime;
+
         const detour = await api.createDetour({
             routeId: selectedRoute.route_id,
             directionId: selectedDirection,
@@ -559,11 +835,71 @@ async function activateDetour() {
         });
 
         console.log('Detour created:', detour);
+
+        // Close the panel immediately
         cancelDetourCreation();
         await loadActiveDetours();
-    } catch (err) {
-        console.error('Failed to create detour:', err);
-        alert('Failed to create detour. Check console for details.');
+
+        // Show Success Modal
+        const modal = document.getElementById('opp-dir-modal')!;
+        const routeInfo = document.getElementById('modal-route-info')!;
+
+        // Format dates for display
+        const startStr = new Date(savedStartTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const endStr = new Date(savedEndTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+        const startName = detour.startStopInfo?.stop_name || 'Start';
+        const endName = detour.endStopInfo?.stop_name || 'End';
+
+        routeInfo.innerHTML = `
+            <div><strong>Route:</strong> ${savedRoute.route_short_name} ${savedRoute.route_long_name}</div>
+            <div style="margin-top:4px"><strong>Detour:</strong> ${startName} → ${endName}</div>
+            <div style="margin-top:4px"><strong>Effective:</strong> ${startStr} — ${endStr}</div>
+        `;
+        modal.style.display = 'flex';
+
+        // Pre-fill opposite direction data
+        const oppDir = savedDirection === 0 ? 1 : 0;
+
+        // Setup Modal Listeners (one-time)
+        const btnDismiss = document.getElementById('modal-btn-dismiss')!;
+        const btnCreate = document.getElementById('modal-btn-create')!;
+
+        // Clone to remove old listeners
+        const newBtnDismiss = btnDismiss.cloneNode(true);
+        btnDismiss.parentNode!.replaceChild(newBtnDismiss, btnDismiss);
+        const newBtnCreate = btnCreate.cloneNode(true);
+        btnCreate.parentNode!.replaceChild(newBtnCreate, btnCreate);
+
+        const close = () => { modal.style.display = 'none'; };
+
+        newBtnDismiss.addEventListener('click', close);
+        newBtnCreate.addEventListener('click', () => {
+            close();
+            // Start creation for opposite direction
+            setDirection(oppDir);
+
+            // Wait for route load
+            setTimeout(() => {
+                startDetourCreation();
+
+                // Pre-fill
+                const descInput = document.getElementById('detour-description') as HTMLTextAreaElement;
+                const startInput = document.getElementById('detour-start') as HTMLInputElement;
+                const endInput = document.getElementById('detour-end') as HTMLInputElement;
+
+                if (descInput) descInput.value = savedDescription;
+                if (startInput) startInput.value = savedStartTime;
+                if (endInput) endInput.value = savedEndTime;
+
+                showMapTooltip([map.getCenter().lat, map.getCenter().lng], 'Switched to opposite direction. Please select the new diverge stop.', 4000);
+            }, 600);
+        });
+
+    } catch (err: any) {
+        alert('Failed to activate detour: ' + err.message);
+        activateBtn.disabled = false;
+        activateBtn.textContent = 'Activate Detour';
     }
 }
 
@@ -573,7 +909,7 @@ async function loadActiveDetours() {
     try {
         const detours = await api.getDetours();
         renderActiveDetours(detours);
-        renderActiveDetoursOnMap(detours);
+        // Don't auto-render on map — user uses Show button per detour
     } catch (err) {
         console.error('Failed to load detours:', err);
     }
@@ -582,6 +918,7 @@ async function loadActiveDetours() {
 function renderActiveDetours(detours: DetourData[]) {
     const container = document.getElementById('active-detours-list')!;
     const countBadge = document.getElementById('active-detour-count')!;
+    cachedDetours = detours; // cache for View All toggle
 
     const now = new Date();
     const active = detours.filter(d => new Date(d.startTime) <= now && new Date(d.endTime) >= now);
@@ -592,28 +929,68 @@ function renderActiveDetours(detours: DetourData[]) {
         return;
     }
 
-    container.innerHTML = detours.map(d => {
-        const isActive = new Date(d.startTime) <= now && new Date(d.endTime) >= now;
-        const route = allRoutes.find(r => r.route_id === d.routeId);
-        return `
-      <div class="detour-card" data-detour-id="${d.id}">
-        <div class="detour-card-header">
-          <span class="detour-card-route">Route ${route?.route_short_name || d.routeId}</span>
-          <div style="display:flex;gap:4px">
-            <button class="btn btn-secondary btn-sm btn-show-detour" data-detour-id="${d.id}" title="Show on map">📍</button>
-            <button class="btn btn-danger btn-sm btn-end-detour" data-detour-id="${d.id}">End</button>
-          </div>
-        </div>
-        <div class="detour-card-description">${d.description || 'No description'}</div>
-        <div class="detour-card-time">
-          ${isActive ? '🔴 ACTIVE' : '⏳ Scheduled'} · ${formatTime(d.startTime)} → ${formatTime(d.endTime)}
-        </div>
-      </div>
-    `;
-    }).join('');
+    // Group by route
+    const grouped = new Map<string, DetourData[]>();
+    for (const d of detours) {
+        const key = d.routeId;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key)!.push(d);
+    }
 
+    let html = '';
+    for (const [routeId, routeDetours] of grouped) {
+        const route = allRoutes.find(r => r.route_id === routeId);
+        const routeName = route ? route.route_short_name : routeId;
+        const routeLong = route?.route_long_name || '';
+        const activeCount = routeDetours.filter(d => new Date(d.startTime) <= now && new Date(d.endTime) >= now).length;
+
+        html += `<div class="detour-route-group">
+          <div class="detour-route-header">
+            <div>
+              <span class="detour-route-badge">Rt ${routeName}</span>
+              <span class="detour-route-name">${routeLong}</span>
+            </div>
+            <span class="detour-route-count">${activeCount} active</span>
+          </div>`;
+
+        for (const d of routeDetours) {
+            const isActive = new Date(d.startTime) <= now && new Date(d.endTime) >= now;
+            const dirLabel = d.directionId === 0 ? 'Outbound' : 'Inbound';
+            const divergeName = d.startStopInfo?.stop_name || d.startStopId;
+            const rejoinName = d.endStopInfo?.stop_name || d.endStopId;
+
+            html += `
+          <div class="detour-card" data-detour-id="${d.id}">
+            <div class="detour-card-header">
+              <div class="detour-card-dir">${dirLabel}</div>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-secondary btn-sm btn-show-detour" data-detour-id="${d.id}" title="Show on map">👁</button>
+                <button class="btn btn-danger btn-sm btn-end-detour" data-detour-id="${d.id}">End</button>
+              </div>
+            </div>
+            <div class="detour-card-description">${d.description || 'No description'}</div>
+            <div class="detour-card-segment">
+              <span class="segment-label">⚠</span> ${divergeName} → <span class="segment-label">✓</span> ${rejoinName}
+            </div>
+            <div class="detour-card-time">
+              ${isActive ? '🔴 ACTIVE' : '⏳ Scheduled'} · ${formatTime(d.startTime)} → ${formatTime(d.endTime)}
+            </div>
+            <div class="detour-card-expand" data-detour-id="${d.id}">▸ Details</div>
+            <div class="detour-card-details" id="detour-details-${d.id}" style="display:none">
+              <div class="detail-loading">Loading...</div>
+            </div>
+          </div>`;
+        }
+
+        html += '</div>';
+    }
+
+    container.innerHTML = html;
+
+    // Bind end buttons
     container.querySelectorAll('.btn-end-detour').forEach(btn => {
         btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
             const id = (e.target as HTMLElement).getAttribute('data-detour-id')!;
             if (confirm('End this detour?')) {
                 await api.deleteDetour(id);
@@ -622,68 +999,285 @@ function renderActiveDetours(detours: DetourData[]) {
         });
     });
 
+    // Bind show-on-map buttons
     container.querySelectorAll('.btn-show-detour').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
             const id = (e.target as HTMLElement).getAttribute('data-detour-id')!;
             const detour = detours.find(d => d.id === id);
-            if (detour && detour.detourShape && detour.detourShape.length > 1) {
-                map.fitBounds(L.latLngBounds(detour.detourShape), { padding: [80, 80] });
+            if (!detour) return;
+            await showDetourOnMap(detour);
+        });
+    });
+
+    // Bind expand toggles
+    container.querySelectorAll('.detour-card-expand').forEach(el => {
+        el.addEventListener('click', async (e) => {
+            const id = (e.target as HTMLElement).getAttribute('data-detour-id')!;
+            const detailsEl = document.getElementById(`detour-details-${id}`);
+            const expandEl = e.target as HTMLElement;
+            if (!detailsEl) return;
+
+            if (detailsEl.style.display === 'none') {
+                detailsEl.style.display = 'block';
+                expandEl.textContent = '▾ Details';
+                await loadDetourDetails(id, detours);
+            } else {
+                detailsEl.style.display = 'none';
+                expandEl.textContent = '▸ Details';
             }
         });
     });
 }
 
+/** Cache detours for View All toggle */
+let cachedDetours: DetourData[] = [];
+let allDetoursVisible = false;
+
 /**
- * Render active detours on the map with dashed red lines and labeled markers.
+ * Show a single detour on the map with full route context and affected segment highlighting.
  */
-function renderActiveDetoursOnMap(detours: DetourData[]) {
+async function showDetourOnMap(detour: DetourData) {
+    activeDetoursLayer.clearLayers();
+    await addRouteContextToLayer(detour, activeDetoursLayer);
+    addDetourOverlayToLayer(detour, activeDetoursLayer);
+
+    // Zoom to show everything
+    const bounds = activeDetoursLayer.getBounds();
+    if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [60, 60] });
+    }
+}
+
+/**
+ * Helper to draw the route context (normal parts + grayed out part) for a detour.
+ */
+async function addRouteContextToLayer(detour: DetourData, layer: any) {
+    const route = allRoutes.find(r => r.route_id === detour.routeId);
+    const routeLabel = route ? route.route_short_name : detour.routeId;
+
+    try {
+        const shapeData = await api.getRouteShape(detour.routeId, detour.directionId);
+        if (shapeData.points && shapeData.points.length > 1) {
+            const routeCoords: [number, number][] = shapeData.points.map((p: any) => [p.lat, p.lon] as [number, number]);
+
+            // Find affected segment indices on the route shape
+            const divergeLatLon = detour.startStopInfo
+                ? [detour.startStopInfo.stop_lat, detour.startStopInfo.stop_lon]
+                : null;
+            const rejoinLatLon = detour.endStopInfo
+                ? [detour.endStopInfo.stop_lat, detour.endStopInfo.stop_lon]
+                : null;
+
+            let divergeIdx = -1, rejoinIdx = -1;
+            if (divergeLatLon && rejoinLatLon) {
+                divergeIdx = findClosestPointIndex(routeCoords, divergeLatLon[0], divergeLatLon[1]);
+                rejoinIdx = findClosestPointIndex(routeCoords, rejoinLatLon[0], rejoinLatLon[1]);
+                if (rejoinIdx <= divergeIdx) rejoinIdx = -1; // safety
+            }
+
+            if (divergeIdx >= 0 && rejoinIdx > divergeIdx) {
+                // Draw BEFORE affected segment (normal route dimmed)
+                if (divergeIdx > 0) {
+                    L.polyline(routeCoords.slice(0, divergeIdx + 1), {
+                        color: '#3b82f6', weight: 3, opacity: 0.35,
+                    }).bindTooltip(`Rt ${routeLabel} (normal)`, { sticky: true })
+                        .addTo(layer);
+                }
+                // Draw AFFECTED segment (greyed out / striped)
+                L.polyline(routeCoords.slice(divergeIdx, rejoinIdx + 1), {
+                    color: '#ef4444', weight: 5, opacity: 0.25,
+                    dashArray: '2, 8',
+                }).bindTooltip(`Rt ${routeLabel} — BYPASSED`, { sticky: true })
+                    .addTo(layer);
+                // Draw AFTER affected segment (normal route dimmed)
+                if (rejoinIdx < routeCoords.length - 1) {
+                    L.polyline(routeCoords.slice(rejoinIdx), {
+                        color: '#3b82f6', weight: 3, opacity: 0.35,
+                    }).bindTooltip(`Rt ${routeLabel} (normal)`, { sticky: true })
+                        .addTo(layer);
+                }
+            } else {
+                // Fallback: show full route dimmed
+                L.polyline(routeCoords, {
+                    color: '#3b82f6', weight: 3, opacity: 0.35,
+                    dashArray: '4, 4',
+                }).bindTooltip(`Rt ${routeLabel} (normal)`, { sticky: true })
+                    .addTo(layer);
+            }
+        }
+    } catch { /* route shape optional */ }
+}
+
+/**
+ * Draw a single detour's path, markers, and replacement stops on a layer.
+ */
+function addDetourOverlayToLayer(d: DetourData, layer: any) {
+    const route = allRoutes.find(r => r.route_id === d.routeId);
+    const routeLabel = route ? route.route_short_name : d.routeId;
+
+    if (d.detourShape && d.detourShape.length > 1) {
+        L.polyline(d.detourShape, {
+            color: '#ef4444', weight: 5, opacity: 0.85, dashArray: '10, 6',
+        }).bindTooltip(`Rt ${routeLabel} Detour`, { sticky: true })
+            .addTo(layer);
+    }
+
+    const diverge = d.startStopInfo;
+    if (diverge) {
+        L.circleMarker([diverge.stop_lat, diverge.stop_lon], {
+            radius: 9, fillColor: '#ef4444', color: '#fff', weight: 2, fillOpacity: 1
+        }).bindTooltip(`⚠ DETOUR START: ${diverge.stop_name} (Rt ${routeLabel})`, { direction: 'top' })
+            .addTo(layer);
+    }
+
+    const rejoin = d.endStopInfo;
+    if (rejoin) {
+        L.circleMarker([rejoin.stop_lat, rejoin.stop_lon], {
+            radius: 9, fillColor: '#10b981', color: '#fff', weight: 2, fillOpacity: 1
+        }).bindTooltip(`✓ DETOUR END: ${rejoin.stop_name} (Rt ${routeLabel})`, { direction: 'top' })
+            .addTo(layer);
+    }
+
+    for (const rs of d.replacementStops || []) {
+        L.circleMarker([rs.lat, rs.lon], {
+            radius: 6, fillColor: rs.isTemporary ? '#f59e0b' : '#3b82f6',
+            color: '#fff', weight: 1.5, fillOpacity: 0.9
+        }).bindTooltip(rs.stopName + (rs.isTemporary ? ' (temp)' : ''), { direction: 'top' })
+            .addTo(layer);
+    }
+}
+
+/**
+ * Toggle all active detours on/off on the map.
+ */
+async function toggleAllDetours() {
+    if (allDetoursVisible) {
+        activeDetoursLayer.clearLayers();
+        allDetoursVisible = false;
+        const btn = document.getElementById('btn-toggle-all-detours');
+        if (btn) btn.textContent = '🗺 View All';
+        return;
+    }
+
     activeDetoursLayer.clearLayers();
     const now = new Date();
+    const activeDetours = cachedDetours.filter(d =>
+        new Date(d.startTime) <= now && new Date(d.endTime) >= now
+    );
 
-    for (const d of detours) {
-        const isActive = new Date(d.startTime) <= now && new Date(d.endTime) >= now;
-        if (!isActive) continue;
+    // Parallel fetch allowed for responsiveness
+    await Promise.all(activeDetours.map(async d => {
+        await addRouteContextToLayer(d, activeDetoursLayer);
+        addDetourOverlayToLayer(d, activeDetoursLayer);
+    }));
 
-        const route = allRoutes.find(r => r.route_id === d.routeId);
-        const routeLabel = route ? route.route_short_name : d.routeId;
+    allDetoursVisible = true;
+    const btn = document.getElementById('btn-toggle-all-detours');
+    if (btn) btn.textContent = '🗺 Hide All';
 
-        // Draw detour path
-        if (d.detourShape && d.detourShape.length > 1) {
-            L.polyline(d.detourShape, {
-                color: '#ef4444',
-                weight: 5,
-                opacity: 0.85,
-                dashArray: '10, 6',
-            }).bindTooltip(`Route ${routeLabel} Detour`, { sticky: true })
-                .addTo(activeDetoursLayer);
+    const bounds = activeDetoursLayer.getBounds();
+    if (bounds.isValid()) map.fitBounds(bounds, { padding: [60, 60] });
+}
+
+/**
+ * Load expanded details for a detour card (affected patterns, skipped stops).
+ */
+async function loadDetourDetails(detourId: string, detours: DetourData[]) {
+    const detour = detours.find(d => d.id === detourId);
+    const detailsEl = document.getElementById(`detour-details-${detourId}`);
+    if (!detour || !detailsEl) return;
+
+    let html = '';
+    const dirLabel = detour.directionId === 0 ? 'Outbound' : 'Inbound';
+    html += `<div class="detail-row"><strong>Direction:</strong> ${dirLabel}</div>`;
+
+    // Load patterns and determine which are affected
+    try {
+        const shapeData = await api.getRouteShape(detour.routeId, detour.directionId);
+        if (shapeData.patterns && shapeData.patterns.length > 0) {
+            html += '<div class="detail-section"><strong>Patterns:</strong></div>';
+            for (const p of shapeData.patterns) {
+                const pInfo = p as any;
+                const stopIds: string[] = pInfo.stopIds || [];
+                const affected = stopIds.includes(detour.startStopId) && stopIds.includes(detour.endStopId);
+                const label = `${pInfo.firstStopName} → ${pInfo.lastStopName}`;
+                const trips = `${pInfo.tripCount} trips`;
+                const icon = affected ? '✓' : '—';
+                const cls = affected ? 'pattern-affected' : 'pattern-unaffected';
+                html += `<div class="detail-pattern ${cls}">
+                  <span class="pattern-icon">${icon}</span>
+                  <span class="pattern-label">${label}</span>
+                  <span class="pattern-trips">${trips}</span>
+                </div>`;
+            }
+        }
+    } catch { /* patterns optional */ }
+
+    // Replacement stops
+    if (detour.replacementStops && detour.replacementStops.length > 0) {
+        html += '<div class="detail-section"><strong>Replacement Stops:</strong></div>';
+        for (const rs of detour.replacementStops) {
+            html += `<div class="detail-stop">${rs.isTemporary ? '🟡' : '🔵'} ${rs.stopName}${rs.isTemporary ? ' (temp)' : ''}</div>`;
+        }
+    }
+
+    detailsEl.innerHTML = html || '<div class="detail-row">No additional details</div>';
+}
+
+/**
+ * Find closest point index on a polyline to a given lat/lon.
+ */
+function findClosestPointIndex(coords: [number, number][], lat: number, lon: number): number {
+    let minDist = Infinity;
+    let bestIdx = 0;
+    for (let i = 0; i < coords.length; i++) {
+        const dx = (coords[i][0] - lat) * 111320;
+        const dy = (coords[i][1] - lon) * 111320 * Math.cos(lat * Math.PI / 180);
+        const dist = dx * dx + dy * dy; // no need for sqrt, comparing only
+        if (dist < minDist) {
+            minDist = dist;
+            bestIdx = i;
+        }
+    }
+    return bestIdx;
+}
+
+/**
+ * Show affected patterns in the configure step during detour creation.
+ */
+async function showAffectedPatterns() {
+    if (!selectedRoute || !divergeStopId || !rejoinStopId) return;
+
+    const section = document.getElementById('affected-patterns-section')!;
+    const list = document.getElementById('affected-patterns-list')!;
+    section.style.display = 'block';
+
+    try {
+        const shapeData = await api.getRouteShape(selectedRoute.route_id, selectedDirection);
+        if (!shapeData.patterns || shapeData.patterns.length <= 1) {
+            section.style.display = 'none'; // only 1 pattern, no need to show
+            return;
         }
 
-        // Diverge marker — use enriched stop info from API
-        const diverge = d.startStopInfo;
-        if (diverge) {
-            L.circleMarker([diverge.stop_lat, diverge.stop_lon], {
-                radius: 9, fillColor: '#ef4444', color: '#fff', weight: 2, fillOpacity: 1
-            }).bindTooltip(`⚠ DETOUR START: ${diverge.stop_name} (Rt ${routeLabel})`, { permanent: false, direction: 'top' })
-                .addTo(activeDetoursLayer);
+        let html = '';
+        for (const p of shapeData.patterns) {
+            const pInfo = p as any;
+            const stopIds: string[] = pInfo.stopIds || [];
+            const affected = stopIds.includes(divergeStopId) && stopIds.includes(rejoinStopId);
+            const label = `${pInfo.firstStopName} → ${pInfo.lastStopName}`;
+            const trips = `${pInfo.tripCount} trips`;
+            const icon = affected ? '✓' : '—';
+            const cls = affected ? 'pattern-affected' : 'pattern-unaffected';
+            html += `<div class="detail-pattern ${cls}">
+              <span class="pattern-icon">${icon}</span>
+              <span class="pattern-label">${label}</span>
+              <span class="pattern-trips">${trips}</span>
+            </div>`;
         }
-
-        // Rejoin marker — use enriched stop info from API
-        const rejoin = d.endStopInfo;
-        if (rejoin) {
-            L.circleMarker([rejoin.stop_lat, rejoin.stop_lon], {
-                radius: 9, fillColor: '#10b981', color: '#fff', weight: 2, fillOpacity: 1
-            }).bindTooltip(`✓ DETOUR END: ${rejoin.stop_name} (Rt ${routeLabel})`, { permanent: false, direction: 'top' })
-                .addTo(activeDetoursLayer);
-        }
-
-        // Replacement stop markers
-        for (const rs of d.replacementStops || []) {
-            L.circleMarker([rs.lat, rs.lon], {
-                radius: 6, fillColor: rs.isTemporary ? '#f59e0b' : '#3b82f6',
-                color: '#fff', weight: 1.5, fillOpacity: 0.9
-            }).bindTooltip(rs.stopName + (rs.isTemporary ? ' (temp)' : ''), { direction: 'top' })
-                .addTo(activeDetoursLayer);
-        }
+        list.innerHTML = html;
+    } catch {
+        section.style.display = 'none';
     }
 }
 
@@ -804,6 +1398,9 @@ function bindEvents() {
 
     // Toggle vehicles
     document.getElementById('btn-toggle-vehicles')!.addEventListener('click', toggleVehicles);
+
+    // Toggle all detours
+    document.getElementById('btn-toggle-all-detours')!.addEventListener('click', toggleAllDetours);
 }
 
 function setDirection(dir: number) {
@@ -925,6 +1522,45 @@ function haversine(lat1: number, lon1: number, lat2: number, lon2: number): numb
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/**
+ * Minimum distance (meters) from a point to the detour polyline.
+ * Uses point-to-segment projection for accuracy.
+ */
+function distanceToPolyline(lat: number, lon: number): number {
+    if (detourPathPoints.length < 2) return Infinity;
+
+    // Convert to rough meters for projection math (local flat-earth approx)
+    const cosLat = Math.cos(lat * Math.PI / 180);
+    const pxM = lat * 111320;
+    const pyM = lon * 111320 * cosLat;
+
+    let minDist = Infinity;
+    for (let i = 0; i < detourPathPoints.length - 1; i++) {
+        const [aLat, aLon] = detourPathPoints[i];
+        const [bLat, bLon] = detourPathPoints[i + 1];
+        const axM = aLat * 111320;
+        const ayM = aLon * 111320 * cosLat;
+        const bxM = bLat * 111320;
+        const byM = bLon * 111320 * cosLat;
+
+        // Project point onto segment
+        const dx = bxM - axM, dy = byM - ayM;
+        const lenSq = dx * dx + dy * dy;
+        if (lenSq === 0) {
+            const d = Math.sqrt((pxM - axM) ** 2 + (pyM - ayM) ** 2);
+            if (d < minDist) minDist = d;
+            continue;
+        }
+        let t = ((pxM - axM) * dx + (pyM - ayM) * dy) / lenSq;
+        t = Math.max(0, Math.min(1, t));
+        const projX = axM + t * dx;
+        const projY = ayM + t * dy;
+        const d = Math.sqrt((pxM - projX) ** 2 + (pyM - projY) ** 2);
+        if (d < minDist) minDist = d;
+    }
+    return minDist;
+}
+
 function toLocalISO(d: Date): string {
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -935,5 +1571,29 @@ function formatTime(iso: string): string {
     return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+// ─── Theme Controller ───
+
+function toggleTheme() {
+    isLightTheme = !isLightTheme;
+    document.body.classList.toggle('light-theme', isLightTheme);
+
+    // Update map tiles
+    const url = isLightTheme
+        ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+        : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
+    if (tileLayer) tileLayer.setUrl(url);
+
+    // Update button text? Only icon for now.
+}
+
+// ─── Event Binding (Extra) ───
+// Add to existing bindEvents or append at end of init
+function bindThemeEvents() {
+    const btn = document.getElementById('btn-theme-toggle');
+    if (btn) btn.addEventListener('click', toggleTheme);
+}
+
 // ─── Boot ───
 init();
+bindThemeEvents();
