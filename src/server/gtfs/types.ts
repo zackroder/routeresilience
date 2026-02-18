@@ -1,5 +1,5 @@
 // ─── GTFS Static Feed Types ───
-// Mirrors the GTFS specification CSV column types
+// Mirrors the column types in the database
 
 export interface Route {
   route_id: string;
@@ -35,8 +35,8 @@ export interface Stop {
 
 export interface StopTime {
   trip_id: string;
-  arrival_time: string;       // HH:MM:SS (can be > 24:00)
-  departure_time: string;     // HH:MM:SS
+  arrival_time: number;       // seconds since midnight (changed from string)
+  departure_time: number;     // seconds since midnight (changed from string)
   stop_id: string;
   stop_sequence: number;
   pickup_type: number;
@@ -71,24 +71,12 @@ export interface CalendarDate {
   exception_type: number; // 1 = added, 2 = removed
 }
 
-// ─── Indexed GTFS Data ───
-
-export interface GTFSData {
-  routes: Map<string, Route>;
-  trips: Map<string, Trip>;
-  stops: Map<string, Stop>;
-  stopTimesByTrip: Map<string, StopTime[]>;
-  tripsByRoute: Map<string, string[]>;          // key: `${route_id}_${direction_id}`
-  shapePoints: Map<string, ShapePoint[]>;
-  calendars: Map<string, Calendar>;
-  calendarDates: Map<string, CalendarDate[]>;   // key: service_id
-
-  // Derived spatial index for nearby-stop queries
-  stopSpatialGrid: Map<string, Stop[]>;         // key: `${gridX}_${gridY}`
-}
-
 // Utility: parse GTFS time string "HH:MM:SS" to seconds since midnight
 export function parseGTFSTime(timeStr: string): number {
+  if (!timeStr) return 0;
+  // If it's already a number (database), return it
+  if (typeof timeStr === 'number') return timeStr;
+
   const parts = timeStr.split(':');
   return parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2]);
 }

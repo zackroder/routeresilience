@@ -202,6 +202,7 @@ body {
   display: flex;
   flex: 1;
   overflow: hidden;
+  position: relative;
 }
 
 /* ─── Sidebar ─── */
@@ -226,6 +227,24 @@ body {
 #sidebar::-webkit-scrollbar-thumb {
   background: var(--bg-surface-active);
   border-radius: 2px;
+}
+
+
+
+#map-container {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Prevent flex overflow */
+}
+
+#map {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
 }
 
 /* ─── Panels ─── */

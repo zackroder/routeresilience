@@ -4,10 +4,8 @@ import path from 'path';
 import https from 'https';
 import http from 'http';
 import AdmZip from 'adm-zip';
-import {
-    GTFSData, Route, Trip, Stop, StopTime, ShapePoint, Calendar, CalendarDate,
-    gridKey, GRID_CELL_SIZE,
-} from './types.js';
+import { GTFSRepository } from './database.js';
+import { Route, Trip, Stop, StopTime, ShapePoint, Calendar, CalendarDate } from './types.js';
 
 const CTA_GTFS_URL = 'https://www.transitchicago.com/downloads/sch_data/google_transit.zip';
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -23,7 +21,6 @@ function downloadFile(url: string, dest: string): Promise<void> {
         const makeRequest = (requestUrl: string) => {
             const client = requestUrl.startsWith('https') ? https : http;
             client.get(requestUrl, (response) => {
-                // Handle redirects
                 if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
                     makeRequest(response.headers.location);
                     return;
@@ -59,342 +56,258 @@ function parseCSV<T>(filePath: string): T[] {
         return [];
     }
     const content = fs.readFileSync(filePath, 'utf-8');
-    // Remove BOM if present
     const cleaned = content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content;
     return parse(cleaned, {
         columns: true,
         skip_empty_lines: true,
         trim: true,
-        cast: false,        // We'll cast manually for type safety
+        cast: false,
     });
-}
-
-// ─── Build Spatial Grid ───
-
-function buildSpatialGrid(stops: Map<string, Stop>): Map<string, Stop[]> {
-    const grid = new Map<string, Stop[]>();
-    for (const stop of stops.values()) {
-        const key = gridKey(stop.stop_lat, stop.stop_lon);
-        let cell = grid.get(key);
-        if (!cell) {
-            cell = [];
-            grid.set(key, cell);
-        }
-        cell.push(stop);
-    }
-    return grid;
 }
 
 // ─── Main Loader ───
 
-export async function loadGTFS(): Promise<GTFSData> {
-    // Download if not cached
+export async function loadGTFS(): Promise<GTFSRepository> {
+    // Download and Extract (keep existing logic)
     if (!fs.existsSync(GTFS_ZIP_PATH)) {
         console.log('Downloading CTA GTFS feed...');
         await downloadFile(CTA_GTFS_URL, GTFS_ZIP_PATH);
         console.log('Download complete.');
     }
 
-    // Extract if not already
     if (!fs.existsSync(GTFS_EXTRACTED_DIR) || !fs.existsSync(path.join(GTFS_EXTRACTED_DIR, 'routes.txt'))) {
         console.log('Extracting GTFS feed...');
         extractZip(GTFS_ZIP_PATH, GTFS_EXTRACTED_DIR);
         console.log('Extraction complete.');
     }
 
-    const gtfsPath = (file: string) => path.join(GTFS_EXTRACTED_DIR, file);
+    const repo = new GTFSRepository();
+    const db = repo.getDb();
 
-    console.log('Parsing GTFS data...');
+    // Check if DB is empty
+    const routeCount = db.prepare('SELECT count(*) as count FROM routes').get() as { count: number };
+    if (routeCount.count > 0) {
+        console.log('GTFS database already populated. skipping import.');
+        return repo;
+    }
+
+    const gtfsPath = (file: string) => path.join(GTFS_EXTRACTED_DIR, file);
+    console.log('Importing GTFS data into SQLite...');
     const startTime = Date.now();
 
-    // Parse routes — filter to buses only (route_type === 3)
-    const rawRoutes = parseCSV<Record<string, string>>(gtfsPath('routes.txt'));
-    const routes = new Map<string, Route>();
-    for (const r of rawRoutes) {
-        if (parseInt(r.route_type) === 3) {
-            routes.set(r.route_id, {
+    repo.transaction(() => {
+        // 1. Routes
+        const rawRoutes = parseCSV<any>(gtfsPath('routes.txt'));
+        const insertRoute = db.prepare(`
+            INSERT INTO routes (route_id, agency_id, route_short_name, route_long_name, route_type, route_color, route_text_color)
+            VALUES (@route_id, @agency_id, @route_short_name, @route_long_name, @route_type, @route_color, @route_text_color)
+        `);
+
+        // Filter to bus routes only (type 3)
+        const busRoutes = rawRoutes.filter((r: any) => parseInt(r.route_type) === 3);
+        for (const r of busRoutes) {
+            insertRoute.run({
                 route_id: r.route_id,
                 agency_id: r.agency_id || '',
                 route_short_name: r.route_short_name || '',
                 route_long_name: r.route_long_name || '',
                 route_type: 3,
                 route_color: r.route_color || '0000FF',
-                route_text_color: r.route_text_color || 'FFFFFF',
+                route_text_color: r.route_text_color || 'FFFFFF'
             });
         }
-    }
+        console.log(`Imported ${busRoutes.length} routes`);
 
-    // Parse trips — only those belonging to bus routes
-    const rawTrips = parseCSV<Record<string, string>>(gtfsPath('trips.txt'));
-    const trips = new Map<string, Trip>();
-    const tripsByRoute = new Map<string, string[]>();
-    for (const t of rawTrips) {
-        if (!routes.has(t.route_id)) continue;
-        const trip: Trip = {
-            trip_id: t.trip_id,
-            route_id: t.route_id,
-            service_id: t.service_id,
-            direction_id: parseInt(t.direction_id) || 0,
-            direction: t.direction || '',
-            trip_headsign: t.trip_headsign || '',
-            shape_id: t.shape_id || '',
-            block_id: t.block_id || '',
-        };
-        trips.set(trip.trip_id, trip);
+        // 2. Trips (first pass to get valid trip IDs)
+        const rawTrips = parseCSV<any>(gtfsPath('trips.txt'));
+        const insertTrip = db.prepare(`
+            INSERT INTO trips (trip_id, route_id, service_id, direction_id, direction, trip_headsign, shape_id, block_id)
+            VALUES (@trip_id, @route_id, @service_id, @direction_id, @direction, @trip_headsign, @shape_id, @block_id)
+        `);
 
-        const key = `${trip.route_id}_${trip.direction_id}`;
-        let arr = tripsByRoute.get(key);
-        if (!arr) {
-            arr = [];
-            tripsByRoute.set(key, arr);
+        // Set of valid route IDs
+        const validRouteIds = new Set(busRoutes.map((r: any) => r.route_id));
+        const validTripIds = new Set<string>();
+        const validShapeIds = new Set<string>();
+
+        for (const t of rawTrips) {
+            if (!validRouteIds.has(t.route_id)) continue;
+            validTripIds.add(t.trip_id);
+            if (t.shape_id) validShapeIds.add(t.shape_id);
+
+            insertTrip.run({
+                trip_id: t.trip_id,
+                route_id: t.route_id,
+                service_id: t.service_id,
+                direction_id: parseInt(t.direction_id) || 0,
+                direction: t.direction || '',
+                trip_headsign: t.trip_headsign || '',
+                shape_id: t.shape_id || '',
+                block_id: t.block_id || ''
+            });
         }
-        arr.push(trip.trip_id);
-    }
+        console.log(`Imported ${validTripIds.size} trips`);
 
-    // Populate route directions from trips
-    for (const route of routes.values()) {
-        const counts: { [d: number]: { [name: string]: number } } = { 0: {}, 1: {} };
+        // 3. Stops
+        const rawStops = parseCSV<any>(gtfsPath('stops.txt'));
+        const insertStop = db.prepare(`
+            INSERT INTO stops (stop_id, stop_name, stop_lat, stop_lon, stop_code, location_type, parent_station)
+            VALUES (@stop_id, @stop_name, @stop_lat, @stop_lon, @stop_code, @location_type, @parent_station)
+        `);
 
-        for (const dir of [0, 1]) {
-            const tripIds = tripsByRoute.get(`${route.route_id}_${dir}`) || [];
-            // Sample up to 100 trips to determine direction label
-            for (let i = 0; i < Math.min(tripIds.length, 100); i++) {
-                const trip = trips.get(tripIds[i]);
-                if (trip?.direction) {
-                    counts[dir][trip.direction] = (counts[dir][trip.direction] || 0) + 1;
+        // Populate all stops (some unrelated stops might be imported, but safer than filtering which is hard without stop_times first)
+        // Optimization: We could filter stops by checking stop_times, but let's just import all for now.
+        for (const s of rawStops) {
+            insertStop.run({
+                stop_id: s.stop_id,
+                stop_name: s.stop_name || '',
+                stop_lat: parseFloat(s.stop_lat),
+                stop_lon: parseFloat(s.stop_lon),
+                stop_code: s.stop_code || '',
+                location_type: parseInt(s.location_type) || 0,
+                parent_station: s.parent_station || ''
+            });
+        }
+        console.log(`Imported ${rawStops.length} stops`);
+
+        // 4. Stop Times
+        const rawStopTimes = parseCSV<any>(gtfsPath('stop_times.txt'));
+        const insertStopTime = db.prepare(`
+            INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence, pickup_type, drop_off_type, shape_dist_traveled)
+            VALUES (@trip_id, @arrival_time, @departure_time, @stop_id, @stop_sequence, @pickup_type, @drop_off_type, @shape_dist_traveled)
+        `);
+
+        // Helpers for time parsing (HH:MM:SS)
+        const parseTime = (t: string) => {
+            if (!t) return 0;
+            const [h, m, s] = t.split(':').map(Number);
+            return h * 3600 + m * 60 + s;
+        };
+
+        let stCount = 0;
+        for (const st of rawStopTimes) {
+            if (!validTripIds.has(st.trip_id)) continue;
+
+            insertStopTime.run({
+                trip_id: st.trip_id,
+                arrival_time: parseTime(st.arrival_time),
+                departure_time: parseTime(st.departure_time),
+                stop_id: st.stop_id,
+                stop_sequence: parseInt(st.stop_sequence),
+                pickup_type: parseInt(st.pickup_type) || 0,
+                drop_off_type: parseInt(st.drop_off_type) || 0,
+                shape_dist_traveled: parseFloat(st.shape_dist_traveled) || 0
+            });
+            stCount++;
+        }
+        console.log(`Imported ${stCount} stop times`);
+
+        // 5. Shapes
+        const rawShapes = parseCSV<any>(gtfsPath('shapes.txt'));
+        const insertShape = db.prepare(`
+            INSERT INTO shapes (shape_id, shape_pt_lat, shape_pt_lon, shape_pt_sequence, shape_dist_traveled)
+            VALUES (@shape_id, @shape_pt_lat, @shape_pt_lon, @shape_pt_sequence, @shape_dist_traveled)
+        `);
+
+        let shapeCount = 0;
+        for (const sp of rawShapes) {
+            if (!validShapeIds.has(sp.shape_id)) continue;
+
+            insertShape.run({
+                shape_id: sp.shape_id,
+                shape_pt_lat: parseFloat(sp.shape_pt_lat),
+                shape_pt_lon: parseFloat(sp.shape_pt_lon),
+                shape_pt_sequence: parseInt(sp.shape_pt_sequence),
+                shape_dist_traveled: parseFloat(sp.shape_dist_traveled) || 0
+            });
+            shapeCount++;
+        }
+        console.log(`Imported ${shapeCount} shape points`);
+
+        // 6. Calendar & Calendar Dates
+        const rawCalendar = parseCSV<any>(gtfsPath('calendar.txt'));
+        const insertCalendar = db.prepare(`
+            INSERT INTO calendar (service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date)
+            VALUES (@service_id, @monday, @tuesday, @wednesday, @thursday, @friday, @saturday, @sunday, @start_date, @end_date)
+        `);
+        for (const c of rawCalendar) {
+            insertCalendar.run({
+                service_id: c.service_id,
+                monday: parseInt(c.monday),
+                tuesday: parseInt(c.tuesday),
+                wednesday: parseInt(c.wednesday),
+                thursday: parseInt(c.thursday),
+                friday: parseInt(c.friday),
+                saturday: parseInt(c.saturday),
+                sunday: parseInt(c.sunday),
+                start_date: c.start_date,
+                end_date: c.end_date
+            });
+        }
+
+        const rawCalendarDates = parseCSV<any>(gtfsPath('calendar_dates.txt'));
+        const insertCalendarDate = db.prepare(`
+            INSERT INTO calendar_dates (service_id, date, exception_type)
+            VALUES (@service_id, @date, @exception_type)
+        `);
+        for (const cd of rawCalendarDates) {
+            insertCalendarDate.run({
+                service_id: cd.service_id,
+                date: cd.date,
+                exception_type: parseInt(cd.exception_type)
+            });
+        }
+        console.log('Imported calendars');
+
+        // 7. Update Directions JSON in Routes
+        // Helper to infer directions (copied logic)
+        console.log('Inferring route directions...');
+        const routes = db.prepare('SELECT route_id FROM routes').all() as { route_id: string }[];
+        const updateRoute = db.prepare('UPDATE routes SET directions = ? WHERE route_id = ?');
+
+        for (const r of routes) {
+            const directions: { [key: number]: string } = {};
+            for (const dir of [0, 1]) {
+                const trips = db.prepare('SELECT direction FROM trips WHERE route_id = ? AND direction_id = ? LIMIT 50').all(r.route_id, dir) as { direction: string }[];
+
+                const counts: { [key: string]: number } = {};
+                for (const t of trips) {
+                    if (t.direction) counts[t.direction] = (counts[t.direction] || 0) + 1;
                 }
-            }
-        }
 
-        route.directions = {};
-        for (const dir of [0, 1]) {
-            let best = '';
-            let max = 0;
-            for (const [name, count] of Object.entries(counts[dir])) {
-                if (count > max) { max = count; best = name; }
-            }
-            if (best) route.directions[dir] = best;
-        }
-    }
-
-    // Parse stops
-    const rawStops = parseCSV<Record<string, string>>(gtfsPath('stops.txt'));
-    const stops = new Map<string, Stop>();
-    for (const s of rawStops) {
-        stops.set(s.stop_id, {
-            stop_id: s.stop_id,
-            stop_name: s.stop_name || '',
-            stop_lat: parseFloat(s.stop_lat),
-            stop_lon: parseFloat(s.stop_lon),
-            stop_code: s.stop_code || '',
-            location_type: parseInt(s.location_type) || 0,
-            parent_station: s.parent_station || '',
-        });
-    }
-
-    // Parse stop_times — only for bus trips
-    const rawStopTimes = parseCSV<Record<string, string>>(gtfsPath('stop_times.txt'));
-    const stopTimesByTrip = new Map<string, StopTime[]>();
-    for (const st of rawStopTimes) {
-        if (!trips.has(st.trip_id)) continue;
-        const stopTime: StopTime = {
-            trip_id: st.trip_id,
-            arrival_time: st.arrival_time,
-            departure_time: st.departure_time,
-            stop_id: st.stop_id,
-            stop_sequence: parseInt(st.stop_sequence),
-            pickup_type: parseInt(st.pickup_type) || 0,
-            drop_off_type: parseInt(st.drop_off_type) || 0,
-            shape_dist_traveled: parseFloat(st.shape_dist_traveled) || 0,
-        };
-        let arr = stopTimesByTrip.get(st.trip_id);
-        if (!arr) {
-            arr = [];
-            stopTimesByTrip.set(st.trip_id, arr);
-        }
-        arr.push(stopTime);
-    }
-
-    // Sort stop times by sequence
-    for (const [, arr] of stopTimesByTrip) {
-        arr.sort((a, b) => a.stop_sequence - b.stop_sequence);
-    }
-
-    // Parse shapes — only for shapes used by bus trips
-    const usedShapeIds = new Set<string>();
-    for (const trip of trips.values()) {
-        if (trip.shape_id) usedShapeIds.add(trip.shape_id);
-    }
-
-    const rawShapes = parseCSV<Record<string, string>>(gtfsPath('shapes.txt'));
-    const shapePoints = new Map<string, ShapePoint[]>();
-    for (const sp of rawShapes) {
-        if (!usedShapeIds.has(sp.shape_id)) continue;
-        const point: ShapePoint = {
-            shape_id: sp.shape_id,
-            shape_pt_lat: parseFloat(sp.shape_pt_lat),
-            shape_pt_lon: parseFloat(sp.shape_pt_lon),
-            shape_pt_sequence: parseInt(sp.shape_pt_sequence),
-            shape_dist_traveled: parseFloat(sp.shape_dist_traveled) || 0,
-        };
-        let arr = shapePoints.get(sp.shape_id);
-        if (!arr) {
-            arr = [];
-            shapePoints.set(sp.shape_id, arr);
-        }
-        arr.push(point);
-    }
-
-    // Sort shapes by sequence
-    for (const [, arr] of shapePoints) {
-        arr.sort((a, b) => a.shape_pt_sequence - b.shape_pt_sequence);
-    }
-
-    // Parse calendars
-    const rawCalendars = parseCSV<Record<string, string>>(gtfsPath('calendar.txt'));
-    const calendars = new Map<string, Calendar>();
-    for (const c of rawCalendars) {
-        calendars.set(c.service_id, {
-            service_id: c.service_id,
-            monday: parseInt(c.monday),
-            tuesday: parseInt(c.tuesday),
-            wednesday: parseInt(c.wednesday),
-            thursday: parseInt(c.thursday),
-            friday: parseInt(c.friday),
-            saturday: parseInt(c.saturday),
-            sunday: parseInt(c.sunday),
-            start_date: c.start_date,
-            end_date: c.end_date,
-        });
-    }
-
-    // Parse calendar_dates
-    const rawCalendarDates = parseCSV<Record<string, string>>(gtfsPath('calendar_dates.txt'));
-    const calendarDates = new Map<string, CalendarDate[]>();
-    for (const cd of rawCalendarDates) {
-        const entry: CalendarDate = {
-            service_id: cd.service_id,
-            date: cd.date,
-            exception_type: parseInt(cd.exception_type),
-        };
-        let arr = calendarDates.get(cd.service_id);
-        if (!arr) {
-            arr = [];
-            calendarDates.set(cd.service_id, arr);
-        }
-        arr.push(entry);
-    }
-
-    // Build spatial grid
-    const stopSpatialGrid = buildSpatialGrid(stops);
-
-    const elapsed = Date.now() - startTime;
-    console.log(`GTFS loaded in ${elapsed}ms: ${routes.size} routes, ${trips.size} trips, ${stops.size} stops, ${stopTimesByTrip.size} trip stop-time lists, ${shapePoints.size} shapes`);
-
-    return {
-        routes,
-        trips,
-        stops,
-        stopTimesByTrip,
-        tripsByRoute,
-        shapePoints,
-        calendars,
-        calendarDates,
-        stopSpatialGrid,
-    };
-}
-
-// ─── Spatial Queries ───
-
-export function findNearbyStops(gtfs: GTFSData, lat: number, lon: number, radiusMeters: number = 500): Stop[] {
-    const radiusDeg = radiusMeters / 111_000; // rough conversion
-    const results: Stop[] = [];
-
-    // Check surrounding grid cells
-    const cellsToCheck = Math.ceil(radiusDeg / GRID_CELL_SIZE) + 1;
-    const centerGx = Math.floor(lat / GRID_CELL_SIZE);
-    const centerGy = Math.floor(lon / GRID_CELL_SIZE);
-
-    for (let dx = -cellsToCheck; dx <= cellsToCheck; dx++) {
-        for (let dy = -cellsToCheck; dy <= cellsToCheck; dy++) {
-            const key = `${centerGx + dx}_${centerGy + dy}`;
-            const cell = gtfs.stopSpatialGrid.get(key);
-            if (!cell) continue;
-            for (const stop of cell) {
-                const dist = haversineMeters(lat, lon, stop.stop_lat, stop.stop_lon);
-                if (dist <= radiusMeters) {
-                    results.push(stop);
+                let best = '';
+                let max = 0;
+                for (const [name, count] of Object.entries(counts)) {
+                    if (count > max) { max = count; best = name; }
                 }
+                if (best) directions[dir] = best;
+            }
+            if (Object.keys(directions).length > 0) {
+                updateRoute.run(JSON.stringify(directions), r.route_id);
             }
         }
-    }
 
-    return results;
+
+        // 8. Update Trip Start/End Times (for fast active trips query)
+        console.log('Updating trip start/end times...');
+        const updateTripTimes = db.prepare(`
+            UPDATE trips 
+            SET start_time = bounds.start_time, end_time = bounds.end_time
+            FROM (
+                SELECT trip_id, min(arrival_time) as start_time, max(departure_time) as end_time
+                FROM stop_times
+                GROUP BY trip_id
+            ) bounds
+            WHERE trips.trip_id = bounds.trip_id
+        `);
+        updateTripTimes.run();
+    });
+
+    console.log(`GTFS import complete in ${Date.now() - startTime}ms`);
+    return repo;
 }
 
-export function findStopsInBounds(gtfs: GTFSData, minLat: number, minLon: number, maxLat: number, maxLon: number): Stop[] {
-    const minGx = Math.floor(minLat / GRID_CELL_SIZE);
-    const maxGx = Math.floor(maxLat / GRID_CELL_SIZE);
-    const minGy = Math.floor(minLon / GRID_CELL_SIZE);
-    const maxGy = Math.floor(maxLon / GRID_CELL_SIZE);
-
-    const results: Stop[] = [];
-    for (let gx = minGx; gx <= maxGx; gx++) {
-        for (let gy = minGy; gy <= maxGy; gy++) {
-            const key = `${gx}_${gy}`;
-            const cell = gtfs.stopSpatialGrid.get(key);
-            if (!cell) continue;
-            for (const stop of cell) {
-                if (stop.stop_lat >= minLat && stop.stop_lat <= maxLat &&
-                    stop.stop_lon >= minLon && stop.stop_lon <= maxLon) {
-                    results.push(stop);
-                }
-            }
-        }
-    }
-    return results;
-}
-
-// ─── Service Date Helpers ───
-
-const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
-
-export function isServiceActiveOnDate(gtfs: GTFSData, serviceId: string, dateStr: string): boolean {
-    // Check calendar_dates exceptions first
-    const exceptions = gtfs.calendarDates.get(serviceId) || [];
-    for (const exc of exceptions) {
-        if (exc.date === dateStr) {
-            return exc.exception_type === 1; // 1 = added, 2 = removed
-        }
-    }
-
-    // Check regular calendar
-    const cal = gtfs.calendars.get(serviceId);
-    if (!cal) return false;
-
-    // Check date range
-    if (dateStr < cal.start_date || dateStr > cal.end_date) return false;
-
-    // Check day of week
-    const year = parseInt(dateStr.substring(0, 4));
-    const month = parseInt(dateStr.substring(4, 6)) - 1;
-    const day = parseInt(dateStr.substring(6, 8));
-    const date = new Date(year, month, day);
-    const dayOfWeek = date.getDay(); // 0 = Sunday
-    const dayName = DAY_NAMES[dayOfWeek];
-
-    return cal[dayName] === 1;
-}
-
-export function getActiveTripsForDate(gtfs: GTFSData, routeId: string, directionId: number, dateStr: string): Trip[] {
-    const key = `${routeId}_${directionId}`;
-    const tripIds = gtfs.tripsByRoute.get(key) || [];
-    return tripIds
-        .map(id => gtfs.trips.get(id)!)
-        .filter(trip => trip && isServiceActiveOnDate(gtfs, trip.service_id, dateStr));
-}
-
-// ─── Haversine Distance ───
+// ─── Helpers ───
 
 export function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6_371_000;

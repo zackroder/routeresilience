@@ -1,74 +1,60 @@
 import express from 'express';
 import cors from 'cors';
+import { createServer } from 'http';
 import { loadGTFS } from './gtfs/loader.js';
+import { createApiRouter } from './api/routes.js';
 import { DetourEngine } from './detour/engine.js';
 import { DetourStore } from './detour/store.js';
 import { SimulationEngine } from './simulation/engine.js';
-import { PredictionEngine } from './realtime/predictions.js';
 import { FeedGenerator } from './realtime/feed.js';
-import { createApiRouter } from './api/routes.js';
+import { PredictionEngine } from './realtime/predictions.js';
 
-const PORT = 3001;
+const PORT = 4000;
 
 async function main() {
-    console.log('═══════════════════════════════════════════════');
-    console.log('  Transit Detour Manager — Starting Up');
-    console.log('═══════════════════════════════════════════════');
+    console.log('─── Transit Detour Manager Server ───');
 
-    // ─── 1. Load GTFS static data ───
+    // ─── 1. Load GTFS Data (to SQLite) ───
     console.log('\n[1/4] Loading GTFS static data...');
-    const gtfs = await loadGTFS();
+    const repo = await loadGTFS();
 
     // ─── 2. Initialize engines ───
     console.log('\n[2/4] Initializing engines...');
     const detourStore = new DetourStore();
-    const detourEngine = new DetourEngine(gtfs, detourStore);
-    const simulation = new SimulationEngine(gtfs, detourEngine);
-    const predictions = new PredictionEngine(gtfs, simulation);
-    const feedGenerator = new FeedGenerator(gtfs, detourEngine, detourStore, simulation, predictions);
+    const detourEngine = new DetourEngine(repo, detourStore);
+    const simulation = new SimulationEngine(repo, detourEngine);
+    const predictions = new PredictionEngine(repo, simulation);
+    const feedGenerator = new FeedGenerator(repo, detourEngine, detourStore, simulation, predictions);
 
-    // ─── 3. Initialize simulation (DEBUG ONLY) ───
-    const isSimulationEnabled = process.env.SIMULATION_DEBUG_MODE === 'true';
-    if (isSimulationEnabled) {
-        console.log('\n[3/4] Initializing vehicle simulation (DEBUG MODE ENABLED)...');
-        simulation.initializeShapes();
-        simulation.spawnActiveVehicles();
-        simulation.start();
-    } else {
-        console.log('\n[3/4] Vehicle simulation skipped (SIMULATION_DEBUG_MODE not set)');
-    }
+    // ─── 3. Start Simulation ───
+    console.log('\n[3/4] Starting simulation...');
+    // Initialize simulation with active vehicles for *now*
+    simulation.spawnActiveVehicles();
+    simulation.start();
 
-    // ─── 4. Start HTTP server ───
-    console.log('\n[4/4] Starting HTTP server...');
+    // ─── 4. Start API Server ───
+    console.log('\n[4/4] Starting API server...');
     const app = express();
     app.use(cors());
-    app.use(express.json({ limit: '10mb' }));
+    app.use(express.json());
 
-    // API routes
-    app.use('/api', createApiRouter(gtfs, detourEngine, detourStore, simulation, feedGenerator));
+    const apiRouter = createApiRouter(repo, detourEngine, detourStore, simulation, feedGenerator);
+    app.use('/api', apiRouter);
 
-    // Health check
-    app.get('/health', (_req, res) => {
-        res.json({ status: 'ok', uptime: process.uptime() });
+    const httpServer = createServer(app);
+    httpServer.listen(PORT, () => {
+        console.log(`\n✅ Server ready at http://localhost:${PORT}`);
+        console.log(`   - API: http://localhost:${PORT}/api`);
+        console.log(`   - GTFS-RT: http://localhost:${PORT}/api/gtfs-rt`);
     });
 
-    app.listen(PORT, () => {
-        console.log('\n═══════════════════════════════════════════════');
-        console.log(`  Server running at http://localhost:${PORT}`);
-        console.log(`  GTFS-RT feed: http://localhost:${PORT}/api/gtfs-rt`);
-        console.log(`  GTFS-RT JSON: http://localhost:${PORT}/api/gtfs-rt/json`);
-        if (isSimulationEnabled) {
-            console.log(`  Vehicles: ${simulation.getVehicleCount()} active`);
-        }
-        console.log(`  Routes: ${gtfs.routes.size} bus routes loaded`);
-        console.log('═══════════════════════════════════════════════');
+    // Graceful shutdown
+    process.on('SIGINT', () => {
+        console.log('\nShutting down...');
+        simulation.stop();
+        repo.close();
+        process.exit(0);
     });
-
-    // Periodic stats
-    setInterval(() => {
-        const simStats = isSimulationEnabled ? `Vehicles: ${simulation.getVehicleCount()}, ` : '';
-        console.log(`[stats] ${simStats}Active Detours: ${detourStore.getActive().length}`);
-    }, 60_000);
 }
 
 main().catch(err => {
