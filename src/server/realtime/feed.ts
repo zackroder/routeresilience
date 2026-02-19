@@ -4,16 +4,7 @@ import { DetourStore } from '../detour/store.js';
 import { SimulationEngine } from '../simulation/engine.js';
 import { PredictionEngine, TripPrediction } from './predictions.js';
 import { encodeFeedMessage } from './proto.js';
-
-/**
- * GTFS-RT Feed Generator
- * 
- * Generates a complete GTFS-RT feed containing:
- * 1. VehiclePosition entities for all tracked vehicles
- * 2. TripUpdate entities for ALL active trips
- * 3. TripModifications entities for active detours
- * 4. ServiceAlert entities
- */
+import { CancellationStore } from '../detour/cancellations.js';
 
 // Cache for the compiled feed
 let cachedFeed: Buffer | null = null;
@@ -28,6 +19,7 @@ export class FeedGenerator {
         private detourStore: DetourStore,
         private simulation: SimulationEngine,
         private predictions: PredictionEngine,
+        private cancellationStore: CancellationStore,
     ) { }
 
     /**
@@ -76,6 +68,9 @@ export class FeedGenerator {
         // ─── 1. Vehicle Position entities for ALL tracked vehicles ───
         const vehicles = this.simulation.getVehicles();
         for (const vehicle of vehicles) {
+            // Skip cancelled trips
+            if (this.cancellationStore.isCancelled(vehicle.tripId)) continue;
+
             entities.push({
                 id: String(entityId++),
                 vehicle: {
@@ -107,6 +102,23 @@ export class FeedGenerator {
         const activeTrips = this.repo.getActiveTrips(dateStr, nowSeconds);
 
         for (const trip of activeTrips) {
+            // Handle cancelled trips
+            if (this.cancellationStore.isCancelled(trip.trip_id)) {
+                entities.push({
+                    id: String(entityId++),
+                    tripUpdate: {
+                        trip: {
+                            tripId: trip.trip_id,
+                            routeId: trip.route_id,
+                            directionId: trip.direction_id,
+                            scheduleRelationship: 3, // CANCELED
+                        },
+                        timestamp: nowEpoch,
+                    },
+                });
+                continue;
+            }
+
             // If trip is modified, it's handled in the modified section
             if (modifiedTrips.has(trip.trip_id)) continue;
 

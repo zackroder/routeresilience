@@ -110,4 +110,46 @@ export const api = {
     },
     getVehicles: () => fetchJson<{ count: number; vehicles: VehicleData[] }>('/vehicles'),
     getStatus: () => fetchJson<SystemStatus>('/status'),
+
+    // Block / Cancellation API
+    getBlocks: (dateStr?: string) => fetchJson<BlockData[]>('/blocks' + (dateStr ? `?date=${dateStr}` : '')),
+    getCancellations: () => fetchJson<CancelledTripData[]>('/cancellations'),
+    cancelTrip: async (tripId: string) => {
+        const res = await fetch(`${API_BASE}/trips/${tripId}/cancel`, { method: 'POST' });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
+    restoreTrip: async (tripId: string) => {
+        const res = await fetch(`${API_BASE}/trips/${tripId}/restore`, { method: 'POST' });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    }
 };
+
+export interface BlockData {
+    block_id: string;
+    trips: BlockTrip[];
+}
+
+export interface BlockTrip {
+    trip_id: string;
+    route_id: string;
+    direction_id: number;
+    start_time: number;
+    end_time: number;
+    trip_headsign: string;
+    is_cancelled: boolean;
+    start_stop_name: string;
+    end_stop_name: string;
+    is_detoured?: boolean; // Added for UI highlight
+}
+
+export interface CancelledTripData {
+    trip_id: string;
+    route_id: string;
+    route_short_name?: string;
+    direction_id: number;
+    trip_headsign: string;
+    start_time: string | number;
+    end_time: string | number;
+}

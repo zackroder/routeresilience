@@ -1,4 +1,4 @@
-import { api, RouteInfo, StopInfo, DetourData, VehicleData } from './services';
+import { api, RouteInfo, StopInfo, DetourData, VehicleData, BlockData, BlockTrip } from './services';
 
 // ─── Declare Leaflet global from CDN ───
 declare const L: any;
@@ -46,6 +46,14 @@ let vehicleUpdateTimer: ReturnType<typeof setInterval> | null = null;
 
 // Route stops data
 let currentRouteStops: StopInfo[] = [];
+
+// Block View state
+let activeView: 'map' | 'blocks' | 'cancelled' = 'map';
+let blockViewDate = new Date().toISOString().slice(0, 10);
+let cachedBlocks: BlockData[] = [];
+let loadedBlockDate: string | null = null;
+// let pixelsPerHour = 100; // Zoom removed
+
 
 // ─── Initialize ───
 
@@ -1610,14 +1618,110 @@ async function updateVehicles() {
 async function pollStatus() {
     try {
         const status = await api.getStatus();
-        document.getElementById('stat-vehicles')!.textContent = `${status.activeVehicles} vehicles`;
-        document.getElementById('stat-detours')!.textContent = `${status.activeDetours} detours`;
+        const elVehicles = document.getElementById('val-vehicles');
+        const elDetours = document.getElementById('val-detours');
+
+        if (elVehicles) elVehicles.textContent = String(status.activeVehicles);
+        if (elDetours) elDetours.textContent = String(status.activeDetours);
+
         updateStatusConnected();
         await loadActiveDetours();
+        await loadCancelledTrips();
     } catch {
         updateStatusDisconnected();
     }
 }
+
+async function loadCancelledTrips() {
+    try {
+        const cancellations = await api.getCancellations();
+        const container = document.getElementById('cancelled-trips-list');
+        const countBadge = document.getElementById('nav-cancelled-count');
+
+        if (!container) return;
+
+        // Cast to any until services.ts type is fully propagated if needed
+        const items = cancellations as any[];
+
+        // Update nav badge
+        if (countBadge) {
+            countBadge.textContent = String(items.length);
+            countBadge.style.display = items.length > 0 ? 'inline-block' : 'none';
+        }
+
+        renderHomeCancelledSummary(items.length);
+
+        if (items.length === 0) {
+            container.innerHTML = '<div class="empty-state">No cancelled trips</div>';
+            return;
+        }
+
+        container.innerHTML = items.map((t: any) => `
+            <div class="cancelled-trip-card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                    <span style="font-weight:700;color:var(--text-primary)">Route ${t.route_id}</span>
+                    <span style="font-size:11px;color:var(--text-muted)">Trip ${t.trip_id}</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">
+                    ${t.trip_headsign || 'Unknown Headsign'}
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <span style="font-size:11px;color:var(--accent-red)">CANCELLED</span>
+                    <button class="btn btn-secondary btn-sm" onclick="restoreTrip('${t.trip_id}')">Restore</button>
+                </div>
+            </div>
+        `).join('');
+
+
+        // Bind restore buttons
+        // Note: onclick string handler above is brittle. Better to bind properly.
+    } catch (err) {
+        console.error('Failed to load cancellations:', err);
+    }
+}
+
+function renderHomeCancelledSummary(count: number) {
+    const container = document.getElementById('home-cancelled-summary');
+    if (!container) return; // Hook this up in index.html
+
+    if (count === 0) {
+        // Force display for now so user can see it exists
+        container.style.display = 'flex';
+        container.innerHTML = `
+            <div style="font-size:24px;font-weight:700;color:var(--text-muted);line-height:1">0</div>
+            <div style="display:flex;flex-direction:column;justify-content:center">
+                <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled</div>
+                <div style="font-size:11px;color:var(--text-secondary)">Today</div>
+            </div>
+        `;
+        return;
+    }
+
+    container.style.display = 'flex';
+    container.innerHTML = `
+        <div style="font-size:24px;font-weight:700;color:var(--accent-red);line-height:1">${count}</div>
+        <div style="display:flex;flex-direction:column;justify-content:center">
+            <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled</div>
+            <div style="font-size:11px;color:var(--text-secondary)">Today</div>
+        </div>
+    `;
+}
+
+// Global scope for onclick (hack, but effective for innerHTML)
+(window as any).restoreTrip = async (tripId: string) => {
+    if (!confirm('Restore this trip?')) return;
+    try {
+        await api.restoreTrip(tripId);
+        loadCancelledTrips();
+        if (activeView === 'blocks') loadBlockView(); // refresh blocks if active
+    } catch (err) { alert('Failed to restore: ' + err); }
+};
+
+function getNowSeconds(): number {
+    const now = new Date();
+    return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+}
+
 
 function updateStatusConnected() {
     document.getElementById('status-text')!.textContent = 'Connected';
@@ -1670,11 +1774,11 @@ function bindEvents() {
         document.getElementById('opp-dir-modal')!.style.display = 'none';
         closeDetourPanel();
     });
-}
 
-/**
- * Start new detour creation (setup for opposite direction)
- */
+    // Block view controls handled in setupNavigation()
+}    /**
+     * Start new detour creation (setup for opposite direction)
+     */
 function startDetourCreationOppositeDirection() {
     // Only allow switching if step is 'select-diverge' (Step 1) or 'idle'
     if (detourStep === 'select-diverge' || detourStep === 'idle') {
@@ -1883,6 +1987,494 @@ function bindThemeEvents() {
     if (btnClose) btnClose.addEventListener('click', closeDetourPanel);
 }
 
-// ─── Boot ───
+
+// ─── Block Viewer Logic ───
+
+function toggleView(view: 'map' | 'blocks') {
+    activeView = view;
+    const mapContainer = document.getElementById('map-container')!;
+    const blocksContainer = document.getElementById('block-view-container')!;
+    const sidebar = document.getElementById('sidebar')!;
+
+    if (view === 'blocks') {
+        mapContainer.style.display = 'none';
+        sidebar.style.display = 'none';
+        blocksContainer.style.display = 'flex';
+        loadBlockView();
+    } else {
+        mapContainer.style.display = 'flex';
+        sidebar.style.display = 'flex';
+        blocksContainer.style.display = 'none';
+        setTimeout(() => map.invalidateSize(), 100);
+    }
+}
+
+async function loadBlockView(forceRefresh = false) {
+    const container = document.getElementById('block-view-content')!;
+
+    // Check cache
+    if (!forceRefresh && cachedBlocks.length > 0 && loadedBlockDate === blockViewDate) {
+        renderBlockViewchart();
+        return;
+    }
+
+    container.innerHTML = '<div class="loading-spinner">Loading blocks...</div>';
+
+    try {
+        const dateStr = blockViewDate.replace(/-/g, '');
+        cachedBlocks = await api.getBlocks(dateStr);
+        loadedBlockDate = blockViewDate;
+        renderBlockViewchart();
+    } catch (err) {
+        console.error('Failed to load blocks:', err);
+        container.innerHTML = '<p class="empty-state" style="color:var(--accent-red)">Failed to load blocks</p>';
+    }
+}
+
+function renderBlockViewchart() {
+    const filterInput = document.getElementById('block-view-filter') as HTMLInputElement;
+    const filter = filterInput ? filterInput.value.toLowerCase() : '';
+    const container = document.getElementById('block-view-content')!;
+
+    if (!cachedBlocks) return;
+
+    const filtered = cachedBlocks.filter(b =>
+        b.block_id.toLowerCase().includes(filter) ||
+        b.trips.some(t => t.route_id.toLowerCase().includes(filter))
+    );
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<p class="empty-state">No blocks found matching filter</p>';
+        return;
+    }
+
+    filtered.sort((a, b) => a.block_id.localeCompare(b.block_id));
+
+    const START_HOUR = 4;
+    const END_HOUR = 30; // 30 = 6am next day
+    const PIXELS_PER_HOUR = 100; // Fixed width
+    const CHART_WIDTH = (END_HOUR - START_HOUR) * PIXELS_PER_HOUR;
+
+    let html = `<div class="block-chart-container" style="width:${CHART_WIDTH + 80}px">`; // +80 for label width
+
+    // Header
+    html += `<div class="timeline-header"><div class="time-scale" style="width:${CHART_WIDTH}px">`;
+    for (let h = START_HOUR; h <= END_HOUR; h++) {
+        const left = (h - START_HOUR) * PIXELS_PER_HOUR;
+        const displayH = h % 24;
+        const ampm = displayH >= 12 ? 'PM' : 'AM';
+        const label = `${displayH === 0 ? 12 : (displayH > 12 ? displayH - 12 : displayH)} ${ampm}`;
+        html += `<div class="time-marker" style="left:${left}px">${label}</div>`;
+    }
+    html += `</div></div>`;
+
+    // Blocks
+    for (const block of filtered) {
+        html += `<div class="block-row">`;
+        html += `<div class="block-label" title="Block ${block.block_id}">${block.block_id}</div>`;
+        html += `<div class="block-track">`;
+
+        // Grid lines
+        for (let h = START_HOUR; h <= END_HOUR; h++) {
+            const left = (h - START_HOUR) * PIXELS_PER_HOUR;
+            html += `<div class="grid-line" style="left:${left}px"></div>`;
+        }
+
+        // Trips
+        for (const trip of block.trips) {
+            const startSec = parseTime(trip.start_time);
+            const endSec = parseTime(trip.end_time);
+
+            const startPx = ((startSec / 3600) - START_HOUR) * PIXELS_PER_HOUR;
+            const widthPx = ((endSec - startSec) / 3600) * PIXELS_PER_HOUR;
+
+            if (widthPx < 2) continue;
+
+            const isCancelled = trip.is_cancelled;
+            const isDetoured = trip.is_detoured;
+            let tripColor = '#3b82f6'; // default blue
+
+            // Fetch route info to determine color logic
+            const route = allRoutes.find(r => r.route_id === trip.route_id);
+            if (route) {
+                // If cancelled, color is handled by CSS class. If active:
+                // We want to color by direction. 
+                // Let's use the route's base color for Dir 0, and a shifted hue for Dir 1?
+                // Or just use two hardcoded distinct colors if route_color is not available.
+                // Better: Use route_color for Dir 0, and maybe an inverted or complementary for Dir 1.
+                // Simpler approach requested by user: "Inbound/Outbound" distinct colors.
+                // Let's use a standard palette: 
+                // Dir 0: Route Color (or Blue)
+                // Dir 1: A distinct variant (e.g. darker or complementary)
+
+                // Let's try: Dir 0 = Route Color, Dir 1 = Purple/Orange fixed?
+                // The user said: "alternate in color by direction... like a block of #8 trips".
+                // Stop trying to derive from route color which might be anything.
+                // Let's use two distinct "Direction" colors for the graph bars, ignoring route color?
+                // OR: Use the route color for Dir 0, and a "Darker/Lighter" version for Dir 1?
+                // Let's go with: Dir 0 = Route Color, Dir 1 = Route Text Color (inverted) or just a fixed secondary color.
+                // User said "color code trips by direction... inbound/outbound".
+
+                // Implementation: 
+                // If Dir 0: Use Route Color
+                // If Dir 1: Use a "Direction 1" variant.
+                // Let's just use an opacity or pattern? No, user explicitly said color.
+
+                if (trip.direction_id === 1) {
+                    // Shift hue or usage a secondary palette
+                    tripColor = '#8b5cf6'; // Violet for inbound/dir 1
+                    if (route.route_color) {
+                        // Simple heuristic: if route is blue-ish, make dir 1 orange-ish?
+                        // Let's just stick to a fixed "Outbound=RouteColor, Inbound=Gray/Dark" for contrast?
+                        // "Alternate in color"
+                        tripColor = `#${route.route_color}`;
+                        // adjust for direction
+                        // This is hard without a color library.
+                        // Let's use a CSS class approach or simple logic.
+                        // Let's use: Dir 0 = Route Color. Dir 1 = Route Color but with a filter? 
+                        // No, let's just use:
+                        // Dir 0: #3b82f6 (Blue) or Route Color
+                        // Dir 1: #f59e0b (Amber) or just different.
+                        // Actually, user cited #8 (Halsted) which is Green.
+                        // If 66 (Chicago) is Blue.
+                        // Let's use:
+                        // Dir 0 = Route Color
+                        // Dir 1 = Route Color (Darkened)
+                    }
+                } else {
+                    tripColor = route.route_color ? `#${route.route_color}` : '#3b82f6';
+                }
+            }
+
+            // Simplest interpretation of "alternate":
+            // Dir 0: Route Color
+            // Dir 1: Darker/Different Route Color. 
+            // Since we don't have color manipulation easily, let's use a border or pattern?
+            // "Color code trips by direction".
+
+            // Let's try:
+            // Dir 0: Route Color
+            // Dir 1: The "Text Color" from GTFS (usually black/white) -> Not good for bars.
+            // Let's use a global palette for directions if route color is standard.
+            // But routes have specific colors.
+            // Let's use: Dir 0 = Route Color. Dir 1 = Route Color with 50% white overlay (lighter)?
+            // We can do this with linear-gradient.
+
+            const bgStyle = isCancelled
+                ? ''
+                : (trip.direction_id === 1
+                    ? `background:repeating-linear-gradient(45deg, #${route?.route_color || '3b82f6'}, #${route?.route_color || '3b82f6'} 10px, white 10px, white 12px)` // Hatched for Dir 1
+                    : `background:#${route?.route_color || '3b82f6'}`);
+
+            const additionalClass = isCancelled ? 'cancelled' : (isDetoured ? 'detoured' : '');
+
+            html += `<div class="trip-bar ${additionalClass}" 
+                          style="left:${startPx}px;width:${widthPx}px;${bgStyle}"
+                          data-trip-id="${trip.trip_id}"
+                          title="Route ${trip.route_id} (${trip.trip_id})">
+                        <span style="font-weight:700;margin-right:4px">${trip.route_id}</span> 
+                        ${trip.trip_headsign}
+                     </div>`;
+        }
+
+        html += `</div></div>`; // Close track, Close row
+    }
+    html += `</div>`; // Close container
+
+    container.innerHTML = html;
+
+    // Event delegation is now handled in setupNavigation()
+    console.log(`[TDM] Rendered ${filtered.length} blocks.`);
+}
+
+function parseTime(time: string | number): number {
+    if (typeof time === 'number') return time;
+    const [h, m, s] = time.split(':').map(Number);
+    return h * 3600 + m * 60 + s;
+}
+
+function formatSeconds(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+function showTripPopover(tripElem: HTMLElement, tripId: string) {
+    console.log(`[TDM] showTripPopover called for ${tripId}`);
+    let trip: BlockTrip | undefined;
+    for (const b of cachedBlocks) {
+        // Use loose equality or string conversion to handle potential number/string mismatch from JSON
+        trip = b.trips.find(t => String(t.trip_id) === String(tripId));
+        if (trip) break;
+    }
+
+    if (!trip) {
+        console.error(`[TDM] Trip ${tripId} not found in cachedBlocks`);
+        return;
+    }
+    console.log('[TDM] Trip found, creating popover');
+
+
+    const existing = document.querySelector('.trip-popover');
+    if (existing) existing.remove();
+
+    // Append to the scroll container so it moves with content
+    const scrollContainer = document.getElementById('block-view-content') as HTMLElement;
+    if (!scrollContainer) {
+        console.error('[TDM] Scroll container not found!');
+        return;
+    }
+
+    const popover = document.createElement('div');
+    popover.className = 'trip-popover';
+
+    // Calculate position relative to the SCROLL CONTAINER
+    // tripElem.offsetLeft is relative to the .block-row
+    // .block-row is relative to .block-chart-container
+    // We need (tripElem absolute left) - (scrollContainer absolute left) + (scrollContainer.scrollLeft)
+    // Actually, simply appending to document.body and updating on scroll is jerky.
+    // Appending to the content container is better if we set position absolute.
+    // However, .block-view-content has overflow:auto. If we append inside, and position it, it will scroll.
+    // BUT, we need to make sure z-index is high enough and it doesn't get clipped if it overflows the container.
+    // "Fixed" strategy: Append to body, but update position on scroll events.
+
+    // User asked: "remain right under the trip as we scroll". 
+    // If I append to the row, it will be clipped by row overflow (if any) or covered by sticky headers?
+    // Let's try appending to the .block-view-content, but outside the rows.
+    // AND ensure .block-view-content has overflow:auto but NOT hidden.
+
+    // Refined strategy: Append to .block-track of the specific row? No, clipping.
+    // Strategy: Append to .block-chart-container. It is the scrollable content.
+    // Position: Absolute relative to chart container.
+
+    // Append to body to avoid overflow clipping and ensure z-index
+    // Append to scroll container to fix horizontal scrolling behavior
+    scrollContainer.appendChild(popover);
+
+    // Position relative to the SCROLL CONTAINER
+    const tripRect = tripElem.getBoundingClientRect();
+    const containerRect = scrollContainer.getBoundingClientRect();
+
+    // Ensure container is positioned
+    scrollContainer.style.position = 'relative';
+
+    const topVal = tripRect.bottom - containerRect.top + scrollContainer.scrollTop + 4;
+    const leftVal = tripRect.left - containerRect.left + scrollContainer.scrollLeft;
+
+    // Position below the trip bar
+    popover.style.top = `${topVal}px`;
+    popover.style.left = `${leftVal}px`;
+    popover.style.position = 'absolute';
+    popover.style.zIndex = '500'; // Below block labels (1000), above content
+    popover.style.display = 'block';
+
+    // Display formatted time
+    const startStr = formatSeconds(parseTime(trip.start_time));
+    const endStr = formatSeconds(parseTime(trip.end_time));
+
+    // Get route info for tooltip
+    const route = allRoutes.find(r => r.route_id === trip.route_id);
+    const routeName = route ? `${route.route_short_name} ${route.route_long_name}` : `Route ${trip.route_id}`;
+    // Subtitle: Direction (Start -> End)
+    const dirName = route?.directions?.[trip['direction_id']] || (trip.direction_id === 0 ? 'Outbound' : 'Inbound');
+    const subtitle = `${dirName} (${trip.start_stop_name || '?'} → ${trip.end_stop_name || '?'})`;
+
+    popover.innerHTML = `
+        <div class="popover-header">
+            <div style="padding-right: 20px;">
+                <strong>${trip.route_id}</strong> <span style="font-weight:normal">${route ? route.route_long_name : ''}</span>
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${subtitle}</div>
+            </div>
+            <button id="btn-close-popover-x" style="position:absolute;top:8px;right:8px;background:none;border:none;cursor:pointer;color:var(--text-secondary);font-size:16px;line-height:1;padding:4px;">✕</button>
+        </div>
+        <div class="popover-body">
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px">
+                ${trip.trip_headsign}
+            </div>
+             <p style="margin:4px 0">
+                <strong>Time:</strong> ${startStr} - ${endStr}<br>
+                <strong>Status:</strong> <span style="color:${trip.is_cancelled ? 'var(--accent-red)' : 'var(--accent-green)'}">
+                    ${trip.is_cancelled ? 'CANCELLED' : 'Scheduled'}
+                </span>
+            </p>
+            <div class="trip-popover-actions">
+                ${(!trip.is_cancelled && parseTime(trip.end_time) > getNowSeconds())
+            ? `<button class="btn btn-danger btn-sm" id="btn-cancel-trip">Cancel</button>`
+            : ''}
+                ${trip.is_cancelled
+            ? `<button class="btn btn-secondary btn-sm" id="btn-restore-trip">Restore</button>`
+            : ''}
+            </div>
+        </div>
+    `;
+
+    // Global click listener to close if clicked outside
+    // Use a small timeout to avoid immediate close from the triggering click
+    setTimeout(() => {
+        const closeHandler = (e: MouseEvent) => {
+            const target = e.target as Node;
+            if (!popover.contains(target) && !tripElem.contains(target)) {
+                console.log('[TDM] Valid outside click detected, closing popover');
+                popover.remove();
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        document.addEventListener('click', closeHandler);
+    }, 100);
+
+    // Button Listeners
+    popover.querySelector('#btn-close-popover-x')?.addEventListener('click', () => popover.remove());
+
+    popover.querySelector('#btn-cancel-trip')?.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to CANCEL this trip?')) return;
+        try {
+            await api.cancelTrip(tripId);
+            trip!.is_cancelled = true;
+            popover.remove();
+            renderBlockViewchart();
+        } catch (err) { alert('Failed to cancel trip: ' + err); }
+    });
+
+    popover.querySelector('#btn-restore-trip')?.addEventListener('click', async () => {
+        try {
+            await api.restoreTrip(tripId);
+            trip!.is_cancelled = false;
+            popover.remove();
+            renderBlockViewchart();
+        } catch (err) { alert('Failed to restore trip: ' + err); }
+    });
+}
+
+// Update bindEvents to include new listeners
+const originalBindEvents = bindThemeEvents; // Hack to chain if needed, but better to just add listeners
+
+// ─── Navigation & View Management ───
+
+function setupNavigation() {
+    // 1. Side Nav Toggle
+    const navAndSidebar = () => {
+        const sideNav = document.getElementById('side-nav');
+        const toggleBtn = document.getElementById('nav-toggle');
+        if (sideNav && toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                sideNav.classList.toggle('expanded');
+                toggleBtn.textContent = sideNav.classList.contains('expanded') ? '«' : '»';
+            });
+        }
+    };
+    navAndSidebar();
+
+    // 2. View Switching
+    const navItems = document.querySelectorAll('.nav-item[data-view]');
+    navItems.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const view = (e.currentTarget as HTMLElement).getAttribute('data-view');
+            if (view) switchView(view);
+        });
+    });
+
+    // 3. Logo Click -> Home
+    document.getElementById('nav-logo')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        switchView('map');
+    });
+
+    // 4. Cancelled Summary Widget Click -> Cancelled View
+    document.getElementById('home-cancelled-summary')?.addEventListener('click', () => {
+        switchView('cancelled');
+    });
+
+    // 5. Theme Toggle
+    document.getElementById('btn-theme-toggle')?.addEventListener('click', toggleTheme);
+
+    // 6. Block View Controls
+    const btnRefresh = document.getElementById('btn-refresh-blocks');
+    if (btnRefresh) btnRefresh.addEventListener('click', () => loadBlockView(true));
+
+    const dateInput = document.getElementById('block-view-date') as HTMLInputElement;
+    if (dateInput) {
+        dateInput.value = blockViewDate;
+        dateInput.addEventListener('change', (e) => {
+            blockViewDate = (e.target as HTMLInputElement).value;
+            loadBlockView();
+        });
+    }
+
+    const filterInput = document.getElementById('block-view-filter');
+    if (filterInput) filterInput.addEventListener('input', renderBlockViewchart);
+
+    // 7. Event Delegation for Block Viewer (Optimization)
+    const blockContent = document.getElementById('block-view-content');
+    if (blockContent) {
+        blockContent.addEventListener('click', (e) => {
+            const target = (e.target as HTMLElement).closest('.trip-bar');
+            if (target) {
+                const tripId = (target as HTMLElement).dataset.tripId;
+                if (tripId) showTripPopover(target as HTMLElement, tripId);
+            }
+        });
+    }
+}
+
+function switchView(viewName: string) {
+    if (viewName !== 'map' && viewName !== 'blocks' && viewName !== 'cancelled') return;
+    activeView = viewName;
+
+    // Update Nav State
+    document.querySelectorAll('.nav-item[data-view]').forEach(el => {
+        el.classList.remove('active');
+        if (el.getAttribute('data-view') === viewName) el.classList.add('active');
+    });
+
+    // Update Containers
+    document.querySelectorAll('.view-container').forEach(el => {
+        el.classList.remove('active');
+    });
+
+    const target = document.getElementById(`view-${viewName}`);
+    if (target) {
+        target.classList.add('active');
+    }
+
+    // Specific logic
+    if (viewName === 'map') {
+        setTimeout(() => map.invalidateSize(), 100); // Resize map
+    } else if (viewName === 'blocks') {
+        loadBlockView();
+    } else if (viewName === 'cancelled') {
+        loadCancelledTrips();
+    }
+}
+
+
+// Export helpers for global scope if needed (though not using modules fully here)
+// Simply defining them at top level is enough, but TS needs to know they exist.
+// The issue is likely Block Scope or Ordering.
+// Moving init logic to the bottom was correct.
+// The error "Cannot find name" suggests they are not in scope.
+// Let's ensure they are defined in the file scope.
+
+// They are defined above in the file.
+// The issue might be that I pasted the call BEFORE the definition?
+// No, functions are hoisted.
+// Unless they are inside another function?
+// Let's check where loadDetours is defined.
+// It is defined around line 900.
+// Let's check if it's inside startDetourCreation? 
+// Ah, `startDetourCreation` ends at line 760?
+// Let's check the file structure.
+
+// To trigger a clean build/check, I'll just touch the file again but ensuring the calls are clean.
+// The previous lints might be stale or due to the chunk error.
+
+
+
+
+// Export helpers for global scope if needed (though not using modules fully here)
+(window as any).loadDetours = loadActiveDetours;
+
+// Initialize
 init();
-bindThemeEvents();
+setupNavigation();
+
