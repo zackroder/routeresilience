@@ -6,13 +6,13 @@ import { PredictionEngine, TripPrediction } from './predictions.js';
 import { encodeFeedMessage } from './proto.js';
 import { CancellationStore } from '../detour/cancellations.js';
 
-// Cache for the compiled feed
-let cachedFeed: Buffer | null = null;
-let cachedFeedJson: any = null;
-let cacheTimestamp = 0;
-const CACHE_TTL_MS = 1_000; // 1 second
-
 export class FeedGenerator {
+    // #5: instance-level cache — not shared across multiple instances
+    private cachedFeed: Buffer | null = null;
+    private cachedFeedJson: any = null;
+    private cacheTimestamp = 0;
+    private static readonly CACHE_TTL_MS = 1_000;
+
     constructor(
         private repo: GTFSRepository,
         private detourEngine: DetourEngine,
@@ -26,16 +26,16 @@ export class FeedGenerator {
      * Generate the full GTFS-RT feed as a binary protobuf buffer.
      */
     async generateFeed(now: Date = new Date()): Promise<Buffer> {
-        if (cachedFeed && (Date.now() - cacheTimestamp) < CACHE_TTL_MS) {
-            return cachedFeed;
+        if (this.cachedFeed && (Date.now() - this.cacheTimestamp) < FeedGenerator.CACHE_TTL_MS) {
+            return this.cachedFeed;
         }
 
         const feedMessage = await this.buildFeedMessage(now);
         const buffer = await encodeFeedMessage(feedMessage);
 
-        cachedFeed = buffer;
-        cachedFeedJson = feedMessage;
-        cacheTimestamp = Date.now();
+        this.cachedFeed = buffer;
+        this.cachedFeedJson = feedMessage;
+        this.cacheTimestamp = Date.now();
 
         return buffer;
     }
@@ -44,11 +44,11 @@ export class FeedGenerator {
      * Get the feed as a JSON object (for debugging).
      */
     async generateFeedJson(now: Date = new Date()): Promise<any> {
-        if (cachedFeedJson && (Date.now() - cacheTimestamp) < CACHE_TTL_MS) {
-            return cachedFeedJson;
+        if (this.cachedFeedJson && (Date.now() - this.cacheTimestamp) < FeedGenerator.CACHE_TTL_MS) {
+            return this.cachedFeedJson;
         }
         await this.generateFeed(now);
-        return cachedFeedJson;
+        return this.cachedFeedJson;
     }
 
     /**
@@ -59,6 +59,8 @@ export class FeedGenerator {
         const nowEpoch = Math.floor(now.getTime() / 1000);
         const dateStr = this.formatDateStr(now);
         const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+        // #4: correct midnight epoch — mirrors PredictionEngine.predictTrip()
+        const midnightEpoch = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000);
         let entityId = 1;
 
         // Get all modified trips from active detours
@@ -166,8 +168,9 @@ export class FeedGenerator {
                     stopTimeUpdate: modTrip.modifiedStopTimes.map(ms => ({
                         stopSequence: ms.stopSequence,
                         stopId: ms.stopId,
-                        arrival: { time: Math.floor(now.getTime() / 1000) - now.getHours() * 3600 - now.getMinutes() * 60 - now.getSeconds() + ms.arrivalTime },
-                        departure: { time: Math.floor(now.getTime() / 1000) - now.getHours() * 3600 - now.getMinutes() * 60 - now.getSeconds() + ms.departureTime },
+                        // #4: use pre-computed midnightEpoch instead of flawed inline formula
+                        arrival: { time: midnightEpoch + ms.arrivalTime },
+                        departure: { time: midnightEpoch + ms.departureTime },
                         scheduleRelationship: 0,
                     })),
                     timestamp: nowEpoch,

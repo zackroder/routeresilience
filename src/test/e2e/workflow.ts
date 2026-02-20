@@ -17,7 +17,9 @@ async function runE2E() {
     const detourEngine = new DetourEngine(repo, detourStore);
     const simulation = new SimulationEngine(repo, detourEngine);
     const predictions = new PredictionEngine(repo, simulation);
-    const feedGenerator = new FeedGenerator(repo, detourEngine, detourStore, simulation, predictions);
+    const { CancellationStore } = await import('../../server/detour/cancellations.js');
+    const cancellationStore = new CancellationStore();
+    const feedGenerator = new FeedGenerator(repo, detourEngine, detourStore, simulation, predictions, cancellationStore);
 
     // 2. Spawn Vehicles
     console.log('   [2/5] Spawning Vehicles...');
@@ -47,7 +49,6 @@ async function runE2E() {
         startStopId: startStop,
         endStopId: endStop,
         detourShape: [[41.8, -87.6], [41.9, -87.6]], // Dummy shape
-        stopsToSkip: [stopTimes[2].stop_id, stopTimes[3].stop_id],
         replacementStops: [],
         startTime: new Date(now.getTime() - 3600000).toISOString(), // 1 hour ago
         endTime: new Date(now.getTime() + 3600000).toISOString(),   // 1 hour from now

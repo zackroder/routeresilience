@@ -16,6 +16,7 @@ const SIM_TICK_MS = 1_000;                // Update every second
 
 export class SimulationEngine {
     private vehicles: Map<string, VehicleState> = new Map();
+    private vehiclesByTripId: Map<string, string> = new Map(); // tripId → vehicleId
     private interpolatedShapes: Map<string, InterpolatedShapePoint[]> = new Map();
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private vehicleCounter = 0;
@@ -174,6 +175,7 @@ export class SimulationEngine {
                 totalDistance: shape[shape.length - 1].distance,
                 currentStopIndex,
                 nextStopId: stopTimes[Math.min(currentStopIndex + 1, stopTimes.length - 1)].stop_id,
+                cachedStopTimes: stopTimes,  // #2: cached once at spawn — never re-fetched in tick
                 status: 'IN_TRANSIT',
                 tripStartTime: firstDeparture,
                 lastUpdateTime: now.getTime(),
@@ -183,6 +185,7 @@ export class SimulationEngine {
                 baseSpeed,
                 speedFactor: process.env.SIMULATION_DEBUG_MODE === 'true' ? speedFactor : undefined
             });
+            this.vehiclesByTripId.set(trip.trip_id, vehicleId); // #3: maintain index
 
             spawned++;
         }
@@ -241,11 +244,13 @@ export class SimulationEngine {
             totalDistance: shape[shape.length - 1].distance,
             currentStopIndex: 0,
             nextStopId: stopTimes[0].stop_id,
+            cachedStopTimes: stopTimes,  // #2: cached once at respawn
             status: 'IN_TRANSIT',
             tripStartTime: firstDeparture,
             lastUpdateTime: now,
             dwellEndTime: 0,
         });
+        this.vehiclesByTripId.set(tripId, vehicleId); // #3: maintain index
 
         // Apply debug variability if enabled
         if (process.env.SIMULATION_DEBUG_MODE === 'true') {
@@ -308,19 +313,18 @@ export class SimulationEngine {
                     vehicle.status = 'IN_TRANSIT';
                     vehicle.currentStopIndex++;
 
-                    const stopTimes = this.repo.getStopTimes(vehicle.tripId);
-                    if (stopTimes && vehicle.currentStopIndex < stopTimes.length) {
-                        vehicle.nextStopId = stopTimes[vehicle.currentStopIndex].stop_id;
+                    // #2: use cached stop times — no DB hit
+                    if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length) {
+                        vehicle.nextStopId = vehicle.cachedStopTimes[vehicle.currentStopIndex].stop_id;
                     }
                 }
                 continue;
             }
 
-            // Move vehicle along shape
+            // Move vehicle along shape — use cached trip shape (trip row is tiny, getTrip is fast)
             const trip = this.repo.getTrip(vehicle.tripId);
             if (!trip) continue;
 
-            // Optimization: Get shape from cache
             const shape = this.getInterpolatedShape(trip.shape_id);
             if (!shape) continue;
 
@@ -368,12 +372,14 @@ export class SimulationEngine {
             }
 
             // Check if near next stop — trigger dwell
-            const stopTimes = this.repo.getStopTimes(vehicle.tripId);
-            if (stopTimes && vehicle.currentStopIndex < stopTimes.length) {
+            // #2: use cachedStopTimes — no DB reads in tick
+            if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length) {
                 const nextStop = this.repo.getStop(vehicle.nextStopId);
                 if (nextStop) {
                     const distToStop = haversineMeters(vehicle.lat, vehicle.lon, nextStop.stop_lat, nextStop.stop_lon);
                     if (distToStop < 30) { // within 30m of stop
+                        // #1 Bug fix: set AT_STOP so the dwell guard at the top of the loop fires
+                        vehicle.status = 'AT_STOP';
                         vehicle.dwellEndTime = now + STOP_DWELL_MS;
                         vehicle.lat = nextStop.stop_lat;
                         vehicle.lon = nextStop.stop_lon;
@@ -419,13 +425,12 @@ export class SimulationEngine {
     }
 
     /**
-     * Get a specific vehicle by trip ID.
+     * Get a specific vehicle by trip ID. O(1) via index.
      */
     getVehicleForTrip(tripId: string): VehicleState | undefined {
-        for (const v of this.vehicles.values()) {
-            if (v.tripId === tripId) return v;
-        }
-        return undefined;
+        const vehicleId = this.vehiclesByTripId.get(tripId);
+        if (!vehicleId) return undefined;
+        return this.vehicles.get(vehicleId);
     }
 
     getVehicleCount(): number {
@@ -437,16 +442,17 @@ export class SimulationEngine {
     }
 
     private arrivalLog: { vehicleId: string, tripId: string, stopId: string, timestamp: number }[] = [];
+    private arrivalLogIndex = 0;  // #10: circular write pointer
+    private static readonly MAX_ARRIVALS = 1000;
 
     private recordArrival(vehicle: VehicleState, stopId: string, timestamp: number) {
-        // Keep last 1000 arrivals
-        if (this.arrivalLog.length > 1000) this.arrivalLog.shift();
-        this.arrivalLog.push({
-            vehicleId: vehicle.vehicleId,
-            tripId: vehicle.tripId,
-            stopId,
-            timestamp
-        });
+        // #10: O(1) circular overwrite instead of O(n) shift()
+        if (this.arrivalLog.length < SimulationEngine.MAX_ARRIVALS) {
+            this.arrivalLog.push({ vehicleId: vehicle.vehicleId, tripId: vehicle.tripId, stopId, timestamp });
+        } else {
+            this.arrivalLog[this.arrivalLogIndex] = { vehicleId: vehicle.vehicleId, tripId: vehicle.tripId, stopId, timestamp };
+            this.arrivalLogIndex = (this.arrivalLogIndex + 1) % SimulationEngine.MAX_ARRIVALS;
+        }
     }
 
     getArrivals() {

@@ -221,6 +221,24 @@ export class GTFSRepository {
         return days[date.getDay()];
     }
 
+    /** Returns true if the given service_id runs on the given date (YYYYMMDD). */
+    isServiceActiveToday(serviceId: string, dateStr: string): boolean {
+        // 1. Check calendar_dates exceptions
+        const exception = this.db.prepare(
+            'SELECT exception_type FROM calendar_dates WHERE service_id = ? AND date = ?'
+        ).get(serviceId, dateStr) as { exception_type: number } | undefined;
+        if (exception) return exception.exception_type === 1;
+
+        // 2. Fall back to regular calendar
+        const cal = this.db.prepare(
+            'SELECT * FROM calendar WHERE service_id = ?'
+        ).get(serviceId) as any;
+        if (!cal) return false;
+        if (dateStr < cal.start_date || dateStr > cal.end_date) return false;
+        const col = this.getDayColumnName(dateStr);
+        return cal[col] === 1;
+    }
+
     /**
      * Get all unique shape IDs for a route/direction
      */
@@ -268,11 +286,6 @@ export class GTFSRepository {
             ORDER BY at.block_id, at.start_time
         `).all(dateStr, dateStr, dateStr, dateStr) as (Trip & { start_stop_name: string; end_stop_name: string })[];
 
-        console.log(`[DEBUG] getBlocks query returned ${rows.length} rows.`);
-        if (rows.length > 0) {
-            console.log('[DEBUG] First row sample:', JSON.stringify(rows[0], null, 2));
-        }
-
         const blocks = new Map<string, (Trip & { start_stop_name: string; end_stop_name: string })[]>();
         for (const trip of rows) {
             if (!blocks.has(trip.block_id)) {
@@ -281,6 +294,20 @@ export class GTFSRepository {
             blocks.get(trip.block_id)!.push(trip);
         }
         return blocks;
+    }
+
+    // ─── Counts ───
+
+    getRouteCount(): number {
+        return (this.db.prepare('SELECT count(*) as c FROM routes').get() as { c: number }).c;
+    }
+
+    getTripCount(): number {
+        return (this.db.prepare('SELECT count(*) as c FROM trips').get() as { c: number }).c;
+    }
+
+    getStopCount(): number {
+        return (this.db.prepare('SELECT count(*) as c FROM stops').get() as { c: number }).c;
     }
 
     close(): void {

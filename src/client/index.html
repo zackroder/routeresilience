@@ -66,7 +66,8 @@
             <span class="stat-item"><span class="stat-icon">🚌</span> <strong id="val-vehicles">—</strong>
               Vehicles</span>
             <span class="status-divider">|</span>
-            <span class="stat-item"><span class="stat-icon">⚠️</span> <strong id="val-detours">—</strong> Detours</span>
+            <span class="stat-item"><span class="stat-icon">⚠️</span> <strong id="val-detours">—</strong> Active
+              Detours</span>
           </div>
         </div>
       </header>
@@ -78,54 +79,95 @@
         <div id="view-map" class="view-container active">
           <!-- Inner Sidebar (Panels) -->
           <aside id="sidebar">
-            <!-- Route Selector Panel -->
-            <div class="panel" id="route-panel">
-              <div class="panel-header">
-                <h2>Route Selection</h2>
+
+            <!-- VIEW 1: HOME DASHBOARD -->
+            <div id="sidebar-home" class="sidebar-view">
+              <!-- Route Selector Panel -->
+              <div class="panel" id="route-panel">
+                <div class="panel-header">
+                  <h2>Route Selection</h2>
+                </div>
+                <div class="panel-body">
+                  <div class="form-group">
+                    <label for="route-search">Search Routes</label>
+                    <input type="text" id="route-search" placeholder="Type route number or name..." autocomplete="off">
+                  </div>
+
+                  <button id="btn-create-detour-panel" class="btn btn-primary"
+                    style="width:100%;margin-bottom:12px;display:none;justify-content:center;gap:8px">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    Create Detour
+                  </button>
+
+                  <div id="route-list" class="route-list">
+                    <div class="loading-spinner">Loading routes...</div>
+                  </div>
+
+
+                </div>
               </div>
-              <div class="panel-body">
-                <!-- Home Cancelled Summary Widget -->
-                <div id="home-cancelled-summary" class="cancelled-summary-widget" style="display:none; cursor:pointer;"
-                  title="View Cancelled Trips">
-                  <!-- Content injected by main.ts -->
+
+              <!-- Dashboard Widgets Area -->
+              <div class="dashboard-widgets">
+                <!-- Cancelled Trips Widget -->
+                <div id="widget-cancelled" class="dashboard-widget" title="View Cancelled Trips">
+                  <div class="widget-count red" id="count-cancelled">0</div>
+                  <div class="widget-label">
+                    <strong>Cancelled Trips</strong>
+                    <span>Today</span>
+                  </div>
                 </div>
 
-                <div class="form-group">
-                  <label for="route-search">Search Routes</label>
-                  <input type="text" id="route-search" placeholder="Type route number or name..." autocomplete="off">
+                <!-- Active Detours Widget -->
+                <div id="widget-active-detours" class="dashboard-widget" title="View Active Detours">
+                  <div class="widget-count yellow" id="count-active-detours">0</div>
+                  <div class="widget-label">
+                    <strong>Active Detours</strong>
+                    <span>Current</span>
+                  </div>
                 </div>
-                <div id="route-list" class="route-list">
-                  <div class="loading-spinner">Loading routes...</div>
+
+                <!-- Upcoming Detours Widget -->
+                <div id="widget-upcoming-detours" class="dashboard-widget" title="View Upcoming Detours">
+                  <div class="widget-count blue" id="count-upcoming-detours">0</div>
+                  <div class="widget-label">
+                    <strong>Upcoming Detours</strong>
+                    <span>Scheduled</span>
+                  </div>
                 </div>
-                <button id="btn-create-detour-panel" class="btn btn-primary"
-                  style="width:100%;margin-top:12px;display:none;justify-content:center;gap:8px">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                  Create Detour
-                </button>
               </div>
             </div>
 
-            <!-- Active Detours Panel (Default View) -->
-            <div class="panel" id="active-detours-panel">
+            <!-- VIEW 2: DETOURS LIST -->
+            <div id="sidebar-detours" class="sidebar-view" style="display:none">
               <div class="panel-header">
-                <h2>Active Detours</h2>
-                <div style="display:flex;gap:6px;align-items:center">
-                  <button class="btn btn-secondary btn-sm" id="btn-toggle-all-detours"
-                    title="Show/hide all detours on map">🗺 View All</button>
-                  <span class="badge" id="active-detour-count">0</span>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <button class="btn-icon" id="btn-back-home" title="Back to Dashboard">←</button>
+                  <h2>Detours</h2>
                 </div>
+                <button class="btn btn-secondary btn-sm" id="btn-toggle-all-detours"
+                  title="Show/hide all detours on map">🗺 Map</button>
               </div>
+
               <div class="panel-body">
-                <div id="active-detours-list" class="detour-list">
+                <!-- Active Section -->
+                <div class="detour-section-header">Active Detours</div>
+                <div id="list-active-detours" class="detour-list">
                   <p class="empty-state">No active detours</p>
+                </div>
+
+                <!-- Upcoming Section -->
+                <div class="detour-section-header" style="margin-top:20px">Upcoming Detours</div>
+                <div id="list-upcoming-detours" class="detour-list">
+                  <p class="empty-state">No upcoming detours</p>
                 </div>
               </div>
             </div>
 
             <!-- Detour Creation Panel -->
-            <div class="panel" id="detour-panel" style="display:none">
+            <div class="panel sidebar-view" id="detour-panel" style="display:none">
               <div class="panel-header">
                 <h2>Create Detour</h2>
                 <div style="display:flex;gap:8px">
@@ -254,6 +296,7 @@
               <!-- <button class="btn-icon" id="close-block-view" title="Close Block View">✕</button> MOVED TO NAV -->
             </div>
           </div>
+          <div id="block-action-bar-slot"></div>
           <div class="block-view-content" id="block-view-content">
             <div class="loading-spinner">Select a date (default: today)</div>
           </div>
@@ -267,9 +310,10 @@
               <h2>Cancelled Trips</h2>
               <div style="font-size:12px;color:var(--text-muted)">Manage cancellations</div>
             </div>
+            <div id="cancelled-action-bar-slot"></div>
             <div class="panel-body" style="flex:1;overflow:auto;padding:0">
               <div id="cancelled-trips-list"
-                style="padding:16px;display:grid;grid-template-columns:repeat(auto-fill, minmax(250px, 1fr));gap:12px">
+                style="padding:16px;display:grid;grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));gap:12px">
                 <div class="loading-spinner">Loading cancellations...</div>
               </div>
             </div>
@@ -304,6 +348,21 @@
   </div>
 
   <script type="module" src="./main.ts"></script>
+  <!-- System Modal -->
+  <div id="system-modal" class="modal-overlay" style="display:none">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="sys-modal-title">Alert</h3>
+      </div>
+      <div class="modal-body">
+        <p id="sys-modal-message">Message goes here...</p>
+      </div>
+      <div class="modal-actions" id="sys-modal-actions">
+        <button class="btn-modal-cancel">Cancel</button>
+        <button class="btn-modal-confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
 </body>
 
 </html>

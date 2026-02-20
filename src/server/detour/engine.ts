@@ -34,10 +34,22 @@ export interface ModifiedTrip {
 }
 
 export class DetourEngine {
+    // #8: pre-compiled statements — not rebuilt on every call
+    private readonly stmtCalendarException: import('better-sqlite3').Statement;
+    private readonly stmtCalendar: import('better-sqlite3').Statement;
+
     constructor(
         private repo: GTFSRepository,
         private store: DetourStore,
-    ) { }
+    ) {
+        // Initialize here so `this.repo` is already assigned
+        this.stmtCalendarException = this.repo.getDb().prepare(
+            'SELECT exception_type FROM calendar_dates WHERE service_id = ? AND date = ?'
+        );
+        this.stmtCalendar = this.repo.getDb().prepare(
+            'SELECT * FROM calendar WHERE service_id = ?'
+        );
+    }
 
     /**
      * Create and store a new detour.
@@ -98,14 +110,14 @@ export class DetourEngine {
     }
 
     private checkServiceActive(serviceId: string, dateStr: string): boolean {
-        // Check exception
-        const exception = this.repo.getDb().prepare('SELECT exception_type FROM calendar_dates WHERE service_id = ? AND date = ?').get(serviceId, dateStr) as { exception_type: number } | undefined;
+        // Check exception first
+        const exception = this.stmtCalendarException.get(serviceId, dateStr) as { exception_type: number } | undefined;
         if (exception) {
             return exception.exception_type === 1;
         }
 
-        // Check calendar
-        const cal = this.repo.getDb().prepare('SELECT * FROM calendar WHERE service_id = ?').get(serviceId) as any;
+        // Check regular calendar
+        const cal = this.stmtCalendar.get(serviceId) as any;
         if (!cal) return false;
 
         if (dateStr < cal.start_date || dateStr > cal.end_date) return false;
@@ -233,6 +245,8 @@ export class DetourEngine {
         return `${y}${m}${d}`;
     }
 
+    // TODO: In the future, this should stitch together the pre-detour path + detour geometry + post-detour path
+    // from the GTFS shape data for a smooth continuous polyline on the map.
     computeFullDetourPath(req: CreateDetourRequest): [number, number][] {
         return req.detourShape;
     }
