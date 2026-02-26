@@ -53,6 +53,7 @@ export interface DetourData {
     startTime: string;
     endTime: string;
     description: string;
+    skippedStops?: { stopId: string; stopName: string }[];
     createdAt: string;
 }
 

@@ -12,7 +12,7 @@ export interface VehicleState {
     lat: number;
     lon: number;
     bearing: number;
-    speed: number;            // m/s
+    speed: number;            // m/s — current speed for current segment
 
     // Progress along route
     shapeIndex: number;        // current index into interpolated shape points
@@ -29,13 +29,26 @@ export interface VehicleState {
     tripStartTime: number;     // seconds since midnight when trip started
     lastUpdateTime: number;    // epoch ms
     dwellEndTime: number;      // epoch ms (when stopped at a stop, when to depart)
-    isLost?: boolean;
-    lostHeading?: number;
+
+    // Schedule adherence
+    delaySeconds: number;      // measured delay: positive = late, negative = early
+    lastPredictedArrivalTime?: number; // epoch seconds, for the next stop
+
+    // Per-segment speed model
+    segmentSpeeds: number[];      // speed (m/s) for each stop-to-stop segment
+    segmentDistances: number[];   // cumulative distance (meters) to each stop along shape
+
+    // Detour tracking
+    activeDetourId?: string;       // currently applied detour ID
+    usingDetourShape?: boolean;    // whether this vehicle switched to detour shape
+
+    // Real-time status
+    occupancyStatus?: number;      // GTFS-RT OccupancyStatus enum
+    congestionLevel?: number;      // GTFS-RT CongestionLevel enum
 
     // Debug / Simulation Only
     baseSpeed?: number;
     speedFactor?: number;
-    scheduleDeviation?: number;
 }
 
 export interface InterpolatedShapePoint {
