@@ -27,6 +27,8 @@ export interface DetourData {
     directionId: number;
     startStopId: string;
     endStopId: string;
+    startStopInfo?: StopInfo | null;
+    endStopInfo?: StopInfo | null;
     replacementStops: {
         stopId: string;
         stopName: string;

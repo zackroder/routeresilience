@@ -23,6 +23,9 @@ export class SimulationEngine {
     private interpolatedShapes: Map<string, InterpolatedShapePoint[]> = new Map();
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private vehicleCounter = 0;
+    private tickCounter = 0;
+    private targetVehicleCount = 0;
+    private activeTripIds: string[] = [];
 
     constructor(
         private gtfs: GTFSData,
@@ -88,6 +91,7 @@ export class SimulationEngine {
         const nowSecondsSinceMidnight = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 
         let spawned = 0;
+        this.activeTripIds = [];
 
         for (const [tripId, trip] of this.gtfs.trips) {
             // Check if this trip's service is active today
@@ -99,11 +103,13 @@ export class SimulationEngine {
             const firstDeparture = parseGTFSTime(stopTimes[0].departure_time);
             const lastArrival = parseGTFSTime(stopTimes[stopTimes.length - 1].arrival_time);
 
-            // Trip is active if current time is between first departure and last arrival
-            if (nowSecondsSinceMidnight < firstDeparture || nowSecondsSinceMidnight > lastArrival) continue;
-
+            // Collect all potentially active trips for respawning
             const shape = this.interpolatedShapes.get(trip.shape_id);
             if (!shape || shape.length < 2) continue;
+            this.activeTripIds.push(tripId);
+
+            // Trip is currently running if between first departure and last arrival
+            if (nowSecondsSinceMidnight < firstDeparture || nowSecondsSinceMidnight > lastArrival) continue;
 
             // Calculate approximate position along the route based on elapsed time
             const elapsed = nowSecondsSinceMidnight - firstDeparture;
@@ -156,7 +162,65 @@ export class SimulationEngine {
             spawned++;
         }
 
-        console.log(`Spawned ${spawned} simulated vehicles`);
+        this.targetVehicleCount = Math.max(spawned, 800); // Keep at least 800 vehicles
+        console.log(`Spawned ${spawned} simulated vehicles (target: ${this.targetVehicleCount})`);
+    }
+
+    /**
+     * Respawn a vehicle by assigning it to a random trip and placing it at the start.
+     * This maintains a consistent fleet size.
+     */
+    private respawnVehicle(vehicleId: string, now: number): void {
+        if (this.activeTripIds.length === 0) return;
+
+        // Pick a random trip from the active pool
+        const tripId = this.activeTripIds[Math.floor(Math.random() * this.activeTripIds.length)];
+        const trip = this.gtfs.trips.get(tripId);
+        if (!trip) return;
+
+        const shape = this.interpolatedShapes.get(trip.shape_id);
+        if (!shape || shape.length < 2) return;
+
+        const stopTimes = this.gtfs.stopTimesByTrip.get(tripId);
+        if (!stopTimes || stopTimes.length < 2) return;
+
+        const firstDeparture = parseGTFSTime(stopTimes[0].departure_time);
+
+        // Start the vehicle at a random point along the first 20% of the route
+        // so they don't all start at the beginning
+        const startProgress = Math.random() * 0.2;
+        const distanceTraveled = startProgress * shape[shape.length - 1].distance;
+
+        let shapeIndex = 0;
+        for (let i = 0; i < shape.length; i++) {
+            if (shape[i].distance >= distanceTraveled) {
+                shapeIndex = i;
+                break;
+            }
+        }
+
+        const pos = shape[shapeIndex];
+        const nextPos = shape[Math.min(shapeIndex + 1, shape.length - 1)];
+
+        this.vehicles.set(vehicleId, {
+            vehicleId,
+            tripId,
+            routeId: trip.route_id,
+            directionId: trip.direction_id,
+            lat: pos.lat,
+            lon: pos.lon,
+            bearing: this.calculateBearing(pos.lat, pos.lon, nextPos.lat, nextPos.lon),
+            speed: DEFAULT_SPEED_MPS * (0.8 + Math.random() * 0.4), // vary speed ±20%
+            shapeIndex,
+            distanceTraveled,
+            totalDistance: shape[shape.length - 1].distance,
+            currentStopIndex: 0,
+            nextStopId: stopTimes[0].stop_id,
+            status: 'IN_TRANSIT',
+            tripStartTime: firstDeparture,
+            lastUpdateTime: now,
+            dwellEndTime: 0,
+        });
     }
 
     /**
@@ -185,11 +249,12 @@ export class SimulationEngine {
      */
     private tick(): void {
         const now = Date.now();
-        const toRemove: string[] = [];
+        const toRespawn: string[] = [];
+        this.tickCounter++;
 
         for (const [vehicleId, vehicle] of this.vehicles) {
             if (vehicle.status === 'COMPLETED') {
-                toRemove.push(vehicleId);
+                toRespawn.push(vehicleId);
                 continue;
             }
 
@@ -261,9 +326,18 @@ export class SimulationEngine {
             }
         }
 
-        // Clean up completed vehicles
-        for (const id of toRemove) {
-            this.vehicles.delete(id);
+        // Respawn completed vehicles instead of deleting them
+        for (const id of toRespawn) {
+            this.respawnVehicle(id, now);
+        }
+
+        // Every 30 ticks (~30s), check if we need to spawn more to maintain target
+        if (this.tickCounter % 30 === 0 && this.vehicles.size < this.targetVehicleCount) {
+            const deficit = this.targetVehicleCount - this.vehicles.size;
+            for (let i = 0; i < Math.min(deficit, 50); i++) {
+                const vehicleId = `v${++this.vehicleCounter}`;
+                this.respawnVehicle(vehicleId, now);
+            }
         }
     }
 

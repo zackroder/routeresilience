@@ -134,6 +134,21 @@ export function createApiRouter(
         })));
     });
 
+    /** Get a stop by ID */
+    router.get('/stops/:id', (req: Request, res: Response) => {
+        const stop = gtfs.stops.get(req.params.id);
+        if (!stop) {
+            res.status(404).json({ error: 'Stop not found' });
+            return;
+        }
+        res.json({
+            stop_id: stop.stop_id,
+            stop_name: stop.stop_name,
+            stop_lat: stop.stop_lat,
+            stop_lon: stop.stop_lon,
+        });
+    });
+
     // ─── Detour Routes ───
 
     /** Create a new detour */
@@ -151,9 +166,27 @@ export function createApiRouter(
         }
     });
 
-    /** List all detours */
+    /** List all detours (enriched with stop location data) */
     router.get('/detours', (_req: Request, res: Response) => {
-        const detours = detourStore.getAll();
+        const detours = detourStore.getAll().map(d => {
+            const startStop = gtfs.stops.get(d.startStopId);
+            const endStop = gtfs.stops.get(d.endStopId);
+            return {
+                ...d,
+                startStopInfo: startStop ? {
+                    stop_id: startStop.stop_id,
+                    stop_name: startStop.stop_name,
+                    stop_lat: startStop.stop_lat,
+                    stop_lon: startStop.stop_lon,
+                } : null,
+                endStopInfo: endStop ? {
+                    stop_id: endStop.stop_id,
+                    stop_name: endStop.stop_name,
+                    stop_lat: endStop.stop_lat,
+                    stop_lon: endStop.stop_lon,
+                } : null,
+            };
+        });
         res.json(detours);
     });
 
