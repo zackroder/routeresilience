@@ -54,13 +54,16 @@
 }
 
 /* ─── Reset & Base ─── */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   height: 100%;
   overflow: hidden;
   font-family: var(--font-family);
@@ -146,8 +149,15 @@ html, body {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .status-stats {
@@ -740,7 +750,7 @@ h3 {
   border-radius: 50%;
   background: var(--accent-blue);
   border: 2px solid white;
-  box-shadow: 0 0 4px rgba(0,0,0,0.5);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
   transition: transform var(--transition-fast);
 }
 
@@ -810,8 +820,15 @@ h3 {
 }
 
 @keyframes modalIn {
-  from { opacity: 0; transform: scale(0.95) translateY(10px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 .modal-content h3 {
@@ -846,4 +863,160 @@ h3 {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+
+/* ─── Vehicle Tooltip ─── */
+.vehicle-tooltip-container .leaflet-tooltip-content {
+  padding: 0 !important;
+}
+
+.vehicle-tooltip {
+  font-family: var(--font-family);
+  font-size: 12px;
+  min-width: 180px;
+}
+
+.vt-header {
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 10px;
+  background: linear-gradient(135deg, var(--accent-blue), #6366f1);
+  color: white;
+  border-radius: 6px 6px 0 0;
+  margin: -8px -10px 6px -10px;
+}
+
+.vt-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  gap: 12px;
+}
+
+.vt-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* ─── Map Instruction Popup ─── */
+.map-instruction-popup .leaflet-popup-content-wrapper {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(99, 102, 241, 0.95)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4) !important;
+}
+
+.map-instruction-popup .leaflet-popup-tip {
+  background: rgba(59, 130, 246, 0.95) !important;
+  border: none !important;
+}
+
+.map-tip {
+  color: white;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  padding: 2px 4px;
+}
+
+/* ─── Temp Stop Popup (non-blocking) ─── */
+.temp-stop-popup .leaflet-popup-content-wrapper {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--accent-orange) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 4px 24px rgba(245, 158, 11, 0.25) !important;
+}
+
+.temp-stop-popup .leaflet-popup-tip {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--accent-orange) !important;
+}
+
+.temp-stop-popup .leaflet-popup-content {
+  margin: 8px 10px !important;
+}
+
+.temp-stop-form {
+  font-family: var(--font-family);
+}
+
+.temp-stop-title {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.temp-stop-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.temp-stop-input:focus {
+  border-color: var(--accent-orange);
+  box-shadow: 0 0 0 2px var(--accent-orange-dim);
+}
+
+.temp-stop-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+
+.temp-stop-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  font-family: var(--font-family);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.temp-stop-btn-cancel {
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
+}
+
+.temp-stop-btn-cancel:hover {
+  background: var(--bg-surface-active);
+  color: var(--text-primary);
+}
+
+.temp-stop-btn-confirm {
+  background: var(--accent-orange);
+  color: var(--text-inverse);
+}
+
+.temp-stop-btn-confirm:hover {
+  background: var(--accent-orange-dim);
+  color: var(--accent-orange);
+}
+
+/* ─── Leaflet Tooltip Styling ─── */
+.leaflet-tooltip {
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  font-family: var(--font-family) !important;
+  font-size: 12px !important;
+  box-shadow: var(--shadow-md) !important;
+  padding: 6px 10px !important;
+}
+
+.leaflet-tooltip::before {
+  border-top-color: var(--bg-surface) !important;
 }

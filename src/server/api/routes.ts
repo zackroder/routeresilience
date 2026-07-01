@@ -58,60 +58,95 @@ export function createApiRouter(
         res.json(trips);
     });
 
-    /** Get shape for a route + direction */
+    /** Get all unique shape patterns for a route + direction (longest first) */
     router.get('/routes/:id/shape', (req: Request, res: Response) => {
         const routeId = req.params.id;
         const directionId = parseInt(req.query.direction as string) || 0;
         const key = `${routeId}_${directionId}`;
         const tripIds = gtfs.tripsByRoute.get(key) || [];
 
-        // Find the first trip with a shape
+        // Collect all unique shapes for this route+direction
+        const shapesMap = new Map<string, { shape_id: string; points: { lat: number; lon: number }[]; totalDistance: number; tripCount: number }>();
         for (const tripId of tripIds) {
             const trip = gtfs.trips.get(tripId);
             if (!trip || !trip.shape_id) continue;
-            const points = gtfs.shapePoints.get(trip.shape_id);
-            if (!points) continue;
-            res.json({
-                shape_id: trip.shape_id,
-                points: points.map(p => ({
-                    lat: p.shape_pt_lat,
-                    lon: p.shape_pt_lon,
-                })),
-            });
-            return;
+            if (shapesMap.has(trip.shape_id)) {
+                shapesMap.get(trip.shape_id)!.tripCount++;
+                continue;
+            }
+            const rawPoints = gtfs.shapePoints.get(trip.shape_id);
+            if (!rawPoints || rawPoints.length < 2) continue;
+
+            const points = rawPoints.map(p => ({ lat: p.shape_pt_lat, lon: p.shape_pt_lon }));
+            // Calculate total distance for sorting
+            let totalDistance = 0;
+            for (let i = 1; i < rawPoints.length; i++) {
+                const a = rawPoints[i - 1], b = rawPoints[i];
+                const dx = (b.shape_pt_lat - a.shape_pt_lat) * 111320;
+                const dy = (b.shape_pt_lon - a.shape_pt_lon) * 111320 * Math.cos(a.shape_pt_lat * Math.PI / 180);
+                totalDistance += Math.sqrt(dx * dx + dy * dy);
+            }
+            shapesMap.set(trip.shape_id, { shape_id: trip.shape_id, points, totalDistance, tripCount: 1 });
         }
 
-        res.json({ shape_id: null, points: [] });
+        // Sort by total distance descending (longest pattern first)
+        const patterns = Array.from(shapesMap.values())
+            .sort((a, b) => b.totalDistance - a.totalDistance);
+
+        if (patterns.length > 0) {
+            // Default response: the longest pattern (backward compatible)
+            res.json({
+                shape_id: patterns[0].shape_id,
+                points: patterns[0].points,
+                patterns: patterns.map((p, i) => ({
+                    shape_id: p.shape_id,
+                    pointCount: p.points.length,
+                    totalDistance: Math.round(p.totalDistance),
+                    tripCount: p.tripCount,
+                    isDefault: i === 0,
+                })),
+            });
+        } else {
+            res.json({ shape_id: null, points: [], patterns: [] });
+        }
     });
 
-    /** Get stops for a route + direction (ordered by sequence from first trip) */
+    /** Get stops for a route + direction — union of all patterns, ordered by longest trip */
     router.get('/routes/:id/stops', (req: Request, res: Response) => {
         const routeId = req.params.id;
         const directionId = parseInt(req.query.direction as string) || 0;
         const key = `${routeId}_${directionId}`;
         const tripIds = gtfs.tripsByRoute.get(key) || [];
 
-        // Use the first trip's stop sequence as representative
+        // Find the longest trip (most stops) as the primary sequence
+        let longestStopTimes: typeof stopTimesRef | null = null;
+        let longestLen = 0;
+        let stopTimesRef: ReturnType<typeof gtfs.stopTimesByTrip.get> = undefined;
         for (const tripId of tripIds) {
-            const stopTimes = gtfs.stopTimesByTrip.get(tripId);
-            if (!stopTimes) continue;
+            const st = gtfs.stopTimesByTrip.get(tripId);
+            if (st && st.length > longestLen) {
+                longestLen = st.length;
+                longestStopTimes = st;
+            }
+        }
 
-            const stops = stopTimes.map(st => {
-                const stop = gtfs.stops.get(st.stop_id);
-                return {
-                    stop_id: st.stop_id,
-                    stop_name: stop?.stop_name || st.stop_id,
-                    stop_lat: stop?.stop_lat || 0,
-                    stop_lon: stop?.stop_lon || 0,
-                    stop_sequence: st.stop_sequence,
-                };
-            });
-
-            res.json(stops);
+        if (!longestStopTimes) {
+            res.json([]);
             return;
         }
 
-        res.json([]);
+        const stops = longestStopTimes.map(st => {
+            const stop = gtfs.stops.get(st.stop_id);
+            return {
+                stop_id: st.stop_id,
+                stop_name: stop?.stop_name || st.stop_id,
+                stop_lat: stop?.stop_lat || 0,
+                stop_lon: stop?.stop_lon || 0,
+                stop_sequence: st.stop_sequence,
+            };
+        });
+
+        res.json(stops);
     });
 
     /** Find nearby stops */
