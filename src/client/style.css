@@ -53,6 +53,30 @@
   --shadow-glow-red: 0 0 20px rgba(239, 68, 68, 0.3);
 }
 
+body.light-theme {
+  --bg-primary: #f3f4f6;
+  --bg-secondary: #e5e7eb;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f9fafb;
+  --bg-surface-active: #f3f4f6;
+  --bg-glass: rgba(255, 255, 255, 0.9);
+  --bg-glass-border: rgba(0, 0, 0, 0.06);
+
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #6b7280;
+  --text-inverse: #ffffff;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --shadow-glow-blue: 0 0 15px rgba(59, 130, 246, 0.2);
+  --shadow-glow-red: 0 0 15px rgba(239, 68, 68, 0.2);
+}
+
 /* ─── Reset & Base ─── */
 *,
 *::before,
@@ -1005,6 +1029,73 @@ h3 {
   color: var(--accent-orange);
 }
 
+/* ─── Rejoin Options Popup ─── */
+.rejoin-options-popup .leaflet-popup-content-wrapper {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--accent-green) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 4px 24px rgba(16, 185, 129, 0.25) !important;
+}
+
+.rejoin-options-popup .leaflet-popup-tip {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--accent-green) !important;
+}
+
+.rejoin-options-popup .leaflet-popup-content {
+  margin: 8px 10px !important;
+}
+
+.rejoin-options {
+  font-family: var(--font-family);
+}
+
+.rejoin-title {
+  font-size: 12px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.rejoin-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.rejoin-btn {
+  padding: 7px 12px;
+  border: none;
+  border-radius: 6px;
+  font-family: var(--font-family);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 120ms ease;
+  text-align: left;
+}
+
+.rejoin-btn-auto {
+  background: var(--accent-green);
+  color: white;
+}
+
+.rejoin-btn-auto:hover {
+  background: #059669;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+.rejoin-btn-keep {
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+}
+
+.rejoin-btn-keep:hover {
+  background: var(--bg-surface-active);
+  color: var(--text-primary);
+}
+
 /* ─── Leaflet Tooltip Styling ─── */
 .leaflet-tooltip {
   background: var(--bg-surface) !important;
@@ -1019,4 +1110,258 @@ h3 {
 
 .leaflet-tooltip::before {
   border-top-color: var(--bg-surface) !important;
+}
+
+/* ─── Route-Grouped Detour Cards ─── */
+.detour-route-group {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.detour-route-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-surface-hover);
+  border-bottom: 1px solid var(--border);
+}
+
+.detour-route-badge {
+  background: var(--accent-blue);
+  color: white;
+  font-weight: 700;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-right: 8px;
+}
+
+.detour-route-name {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.detour-route-count {
+  font-size: 10px;
+  color: var(--accent-red);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.detour-route-group .detour-card {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  margin: 0;
+}
+
+.detour-route-group .detour-card:last-child {
+  border-bottom: none;
+}
+
+.detour-card-dir {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+}
+
+.detour-card-segment {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 3px 0;
+}
+
+.segment-label {
+  font-weight: 700;
+}
+
+.detour-card-expand {
+  font-size: 11px;
+  color: var(--accent-blue);
+  cursor: pointer;
+  padding: 4px 0 2px;
+  user-select: none;
+  transition: color 120ms;
+}
+
+.detour-card-expand:hover {
+  color: var(--accent-blue-bright, #60a5fa);
+}
+
+/* ─── Expanded Detour Details ─── */
+.detour-card-details {
+  padding: 6px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.detail-row {
+  padding: 3px 0;
+}
+
+.detail-section {
+  padding: 5px 0 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+
+.detail-pattern {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  margin: 2px 0;
+  font-size: 11px;
+}
+
+.pattern-affected {
+  background: rgba(16, 185, 129, 0.1);
+  border-left: 3px solid var(--accent-green);
+}
+
+.pattern-unaffected {
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 3px solid var(--border);
+  opacity: 0.7;
+}
+
+.pattern-icon {
+  font-weight: 700;
+  min-width: 14px;
+  text-align: center;
+}
+
+.pattern-affected .pattern-icon {
+  color: var(--accent-green);
+}
+
+.pattern-unaffected .pattern-icon {
+  color: var(--text-muted);
+}
+
+.pattern-label {
+  flex: 1;
+}
+
+.pattern-trips {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.detail-stop {
+  padding: 2px 0;
+  font-size: 11px;
+}
+
+.detail-loading {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* ─── Blocking Modal ─── */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(15, 17, 23, 0.85);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body.light-theme .modal-overlay {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.modal-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  width: 450px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: modal-pop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface-hover);
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent-green);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-body {
+  padding: 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.modal-route-info {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--bg-primary);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.modal-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  background: var(--bg-surface-hover);
+}
+
+/* ─── Candidate Stops ─── */
+.candidate-stop-marker {
+  transition: all 0.2s ease;
+}
+
+.candidate-stop-marker:hover {
+  transform: scale(1.2);
+  z-index: 1000 !important;
 }

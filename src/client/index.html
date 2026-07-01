@@ -41,6 +41,9 @@
           <span class="stat-divider">|</span>
           <span id="stat-detours">— detours</span>
         </div>
+        <button class="btn btn-secondary btn-sm" id="btn-theme-toggle" title="Toggle Light/Dark Theme">
+          🌙/☀️
+        </button>
       </div>
     </header>
 
@@ -75,7 +78,10 @@
         <div class="panel" id="detour-panel" style="display:none">
           <div class="panel-header">
             <h2>Create Detour</h2>
-            <button class="btn-icon" id="close-detour-panel" title="Cancel">✕</button>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" id="btn-back-header" style="display:none">← Back</button>
+              <button class="btn-icon" id="close-detour-panel" title="Cancel">✕</button>
+            </div>
           </div>
           <div class="panel-body">
             <div class="detour-steps">
@@ -93,6 +99,10 @@
               </div>
               <div class="step" id="step-4-indicator">
                 <span class="step-number">4</span>
+                <span class="step-label">Add stops</span>
+              </div>
+              <div class="step" id="step-5-indicator">
+                <span class="step-number">5</span>
                 <span class="step-label">Configure & activate</span>
               </div>
             </div>
@@ -101,29 +111,27 @@
               Click on a stop where the detour <strong>begins</strong> (diverge point).
             </div>
 
-            <!-- Replacement Stops List -->
+            <!-- Replacement Stops List (Step 4) -->
             <div id="replacement-stops-section" style="display:none">
               <h3>Replacement Stops</h3>
               <div id="replacement-stops-list" class="replacement-stops-list"></div>
-              <p class="help-text">Click existing stops or map to add temporary stops along the detour.</p>
+              <p class="help-text">Click candidate stops on map or click empty space to add temp stops.</p>
             </div>
 
-            <!-- Detour Config (Step 4) -->
+            <!-- Detour Config (Step 5) -->
             <div id="detour-config" style="display:none">
               <div class="form-group">
                 <label for="detour-description">Description</label>
                 <textarea id="detour-description" rows="2"
                   placeholder="e.g. Water main break on Western Ave between 47th and 51st"></textarea>
               </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="detour-start">Start Time</label>
-                  <input type="datetime-local" id="detour-start">
-                </div>
-                <div class="form-group">
-                  <label for="detour-end">End Time</label>
-                  <input type="datetime-local" id="detour-end">
-                </div>
+              <div class="form-group">
+                <label for="detour-start">Start Time</label>
+                <input type="datetime-local" id="detour-start">
+              </div>
+              <div class="form-group">
+                <label for="detour-end">End Time</label>
+                <input type="datetime-local" id="detour-end">
               </div>
               <button class="btn btn-primary btn-lg" id="activate-detour">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -131,6 +139,18 @@
                 </svg>
                 Activate Detour
               </button>
+              <button class="btn btn-secondary btn-sm" id="create-opposite-dir"
+                style="display:none;margin-top:6px;width:100%">
+                ↔ Create for opposite direction
+              </button>
+
+              <!-- Affected Patterns -->
+              <div id="affected-patterns-section" style="display:none;margin-top:12px">
+                <h4
+                  style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:6px">
+                  Affected Patterns</h4>
+                <div id="affected-patterns-list"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -139,7 +159,11 @@
         <div class="panel" id="active-detours-panel">
           <div class="panel-header">
             <h2>Active Detours</h2>
-            <span class="badge" id="active-detour-count">0</span>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="btn btn-secondary btn-sm" id="btn-toggle-all-detours"
+                title="Show/hide all detours on map">🗺 View All</button>
+              <span class="badge" id="active-detour-count">0</span>
+            </div>
           </div>
           <div class="panel-body">
             <div id="active-detours-list" class="detour-list">
@@ -171,6 +195,27 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <!-- Blocking Modal for Opposite Direction -->
+  <div id="opp-dir-modal" class="modal-overlay" style="display:none">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3><span style="color:var(--accent-green)">✓</span> Detour Activated</h3>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom:12px;color:var(--text-secondary)">The detour has been successfully created.</p>
+        <div id="modal-route-info" class="modal-route-card">
+          <!-- Populated by JS -->
+        </div>
+        <p style="margin-top:16px;font-size:13px">Would you like to create a detour for the <strong>opposite
+            direction</strong>?</p>
+      </div>
+      <div class="modal-footer">
+        <button id="modal-btn-dismiss" class="btn btn-secondary">No, I'm done</button>
+        <button id="modal-btn-create" class="btn btn-primary">Yes, create opposite detour</button>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="./main.ts"></script>

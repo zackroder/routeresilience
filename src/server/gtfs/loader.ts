@@ -305,6 +305,29 @@ export function findNearbyStops(gtfs: GTFSData, lat: number, lon: number, radius
     return results;
 }
 
+export function findStopsInBounds(gtfs: GTFSData, minLat: number, minLon: number, maxLat: number, maxLon: number): Stop[] {
+    const minGx = Math.floor(minLat / GRID_CELL_SIZE);
+    const maxGx = Math.floor(maxLat / GRID_CELL_SIZE);
+    const minGy = Math.floor(minLon / GRID_CELL_SIZE);
+    const maxGy = Math.floor(maxLon / GRID_CELL_SIZE);
+
+    const results: Stop[] = [];
+    for (let gx = minGx; gx <= maxGx; gx++) {
+        for (let gy = minGy; gy <= maxGy; gy++) {
+            const key = `${gx}_${gy}`;
+            const cell = gtfs.stopSpatialGrid.get(key);
+            if (!cell) continue;
+            for (const stop of cell) {
+                if (stop.stop_lat >= minLat && stop.stop_lat <= maxLat &&
+                    stop.stop_lon >= minLon && stop.stop_lon <= maxLon) {
+                    results.push(stop);
+                }
+            }
+        }
+    }
+    return results;
+}
+
 // ─── Service Date Helpers ───
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;

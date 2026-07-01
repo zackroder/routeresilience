@@ -19,6 +19,16 @@ export interface StopInfo {
 export interface ShapeData {
     shape_id: string;
     points: { lat: number; lon: number }[];
+    patterns?: {
+        shape_id: string;
+        pointCount: number;
+        totalDistance: number;
+        tripCount: number;
+        isDefault: boolean;
+        firstStopName: string;
+        lastStopName: string;
+        stopIds: string[];
+    }[];
 }
 
 export interface DetourData {
@@ -80,6 +90,8 @@ export const api = {
         fetchJson<StopInfo[]>(`/routes/${routeId}/stops?direction=${direction}`),
     getNearbyStops: (lat: number, lng: number, radius = 500) =>
         fetchJson<StopInfo[]>(`/stops/nearby?lat=${lat}&lng=${lng}&radius=${radius}`),
+    getStopsInBounds: (minLat: number, minLon: number, maxLat: number, maxLon: number) =>
+        fetchJson<StopInfo[]>(`/stops/bounds?minLat=${minLat}&minLon=${minLon}&maxLat=${maxLat}&maxLon=${maxLon}`),
     getDetours: () => fetchJson<DetourData[]>('/detours'),
     createDetour: async (data: any): Promise<DetourData> => {
         const res = await fetch(`${API_BASE}/detours`, {
