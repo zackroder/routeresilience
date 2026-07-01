@@ -9,6 +9,7 @@ export interface Route {
   route_type: number;
   route_color: string;
   route_text_color: string;
+  directions?: { [id: number]: string };
 }
 
 export interface Trip {
@@ -16,6 +17,7 @@ export interface Trip {
   route_id: string;
   service_id: string;
   direction_id: number;
+  direction: string;
   trip_headsign: string;
   shape_id: string;
   block_id: string;

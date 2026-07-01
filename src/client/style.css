@@ -1361,7 +1361,23 @@ body.light-theme .modal-overlay {
   transition: all 0.2s ease;
 }
 
-.candidate-stop-marker:hover {
-  transform: scale(1.2);
-  z-index: 1000 !important;
+
+
+/* Fix jittery tooltip */
+.candidate-tooltip {
+  pointer-events: none;
+}
+
+/* Fix route badge spacing */
+.route-badge {
+  margin-right: 12px;
+}
+
+/* Disabled state */
+.btn.disabled,
+.map-control-btn.disabled,
+.direction-btn.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
 }

@@ -26,6 +26,7 @@ export function createApiRouter(
             route_long_name: r.route_long_name,
             route_color: r.route_color,
             route_text_color: r.route_text_color,
+            directions: r.directions,
         }));
         routes.sort((a, b) => {
             const aNum = parseInt(a.route_short_name);

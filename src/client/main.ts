@@ -128,19 +128,88 @@ function renderRouteList(routes: RouteInfo[]) {
     }
 
     container.innerHTML = routes.map(r => `
-    <div class="route-item" data-route-id="${r.route_id}" id="route-item-${r.route_id}">
-      <span class="route-badge" style="background:#${r.route_color || '3b82f6'};color:#${r.route_text_color || 'ffffff'}">${r.route_short_name}</span>
-      <span class="route-name">${r.route_long_name}</span>
+    <div class="route-item-container">
+        <div class="route-item" data-route-id="${r.route_id}" id="route-item-${r.route_id}">
+          <div class="route-header" style="display:flex;align-items:center;width:100%">
+              <span class="route-badge" style="background:#${r.route_color || '3b82f6'};color:#${r.route_text_color || 'ffffff'}">${r.route_short_name}</span>
+              <span class="route-name" style="flex:1">${r.route_long_name}</span>
+              <button class="btn-expand-route" data-route-id="${r.route_id}" style="background:none;border:none;cursor:pointer;padding:4px;color:var(--text-secondary)" title="View Patterns">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+          </div>
+        </div>
+        <div class="route-details" id="route-details-${r.route_id}" style="display:none;padding-left:12px;border-left:2px solid var(--border);margin-left:12px;margin-bottom:8px">
+            <div class="loading-spinner" style="padding:8px 0;font-size:12px;color:var(--text-muted)">Loading patterns...</div>
+        </div>
     </div>
   `).join('');
 
     // Click handlers
     container.querySelectorAll('.route-item').forEach(el => {
-        el.addEventListener('click', () => {
+        el.addEventListener('click', (e) => {
+            if ((e.target as HTMLElement).closest('.btn-expand-route')) return;
             const routeId = el.getAttribute('data-route-id')!;
             selectRoute(routeId);
         });
     });
+
+    container.querySelectorAll('.btn-expand-route').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const routeId = btn.getAttribute('data-route-id')!;
+            toggleRouteDetails(routeId);
+        });
+    });
+}
+
+async function toggleRouteDetails(routeId: string) {
+    const details = document.getElementById(`route-details-${routeId}`)!;
+    const isVisible = details.style.display === 'block';
+
+    if (isVisible) {
+        details.style.display = 'none';
+        return;
+    }
+
+    details.style.display = 'block';
+
+    // Check if already loaded
+    if (details.dataset.loaded === 'true') return;
+
+    try {
+        const route = allRoutes.find(r => r.route_id === routeId);
+        const dir0Label = route?.directions?.[0] || 'Outbound';
+        const dir1Label = route?.directions?.[1] || 'Inbound';
+
+        const [shape0, shape1] = await Promise.all([
+            api.getRouteShape(routeId, 0),
+            api.getRouteShape(routeId, 1)
+        ]);
+
+        let html = '';
+        const renderDir = (dirLabel: string, patterns: any[]) => {
+            if (!patterns || patterns.length === 0) return '';
+            let s = `<div style="font-size:11px;font-weight:700;margin-top:8px;margin-bottom:4px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">${dirLabel}</div>`;
+            patterns.forEach(p => {
+                s += `<div style="font-size:12px;margin-top:3px;display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border-subtle)">
+                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px" title="${p.firstStopName} to ${p.lastStopName}">${p.firstStopName} → ${p.lastStopName}</span>
+                    <span style="color:var(--text-muted);font-size:11px;margin-left:6px;white-space:nowrap">${p.tripCount} trips</span>
+                </div>`;
+            });
+            return s;
+        };
+
+        html += renderDir(dir0Label, shape0.patterns || []);
+        html += renderDir(dir1Label, shape1.patterns || []);
+
+        if (!html) html = '<div style="font-size:12px;color:var(--text-muted);padding:4px 0">No patterns found</div>';
+
+        details.innerHTML = html;
+        details.dataset.loaded = 'true';
+    } catch (err) {
+        console.error(err);
+        details.innerHTML = '<div style="color:var(--accent-red);font-size:12px;padding:4px 0">Failed to load details</div>';
+    }
 }
 
 async function selectRoute(routeId: string) {
@@ -153,8 +222,17 @@ async function selectRoute(routeId: string) {
     document.querySelectorAll('.route-item').forEach(el => el.classList.remove('selected'));
     document.getElementById(`route-item-${routeId}`)?.classList.add('selected');
 
-    // Show direction toggle
-    document.getElementById('direction-group')!.style.display = 'block';
+    // Show direction toggle and update labels
+    const dirGroup = document.getElementById('direction-group')!;
+    dirGroup.style.display = 'block';
+
+    // Update direction button labels using aggregated GTFS data
+    // Update direction button labels using aggregated GTFS data
+    const btn0 = document.getElementById('dir-btn-0'); // Fix ID: index.html says dir-btn-0
+    const btn1 = document.getElementById('dir-btn-1'); // Fix ID: index.html says dir-btn-1
+    console.log('[TDM] Route directions:', route.directions);
+    if (btn0) btn0.textContent = route.directions?.[0] || 'Outbound';
+    if (btn1) btn1.textContent = route.directions?.[1] || 'Inbound';
 
     // Show create detour button
     document.getElementById('btn-create-detour')!.style.display = 'flex';
@@ -207,7 +285,10 @@ function renderStopsOnMap(stops: StopInfo[]) {
             offset: [0, -8],
         });
 
-        marker.on('click', () => onStopClick(stop));
+        marker.on('click', (e: any) => {
+            L.DomEvent.stopPropagation(e);
+            onStopClick(stop);
+        });
         marker.addTo(stopsLayer);
     }
 }
@@ -318,7 +399,9 @@ async function finalizeRejoinStop(stop: StopInfo) {
 }
 
 async function onMapClick(e: any) {
-    if (detourStep === 'trace-path') {
+    if (detourStep === 'add-stops') {
+        showTempStopPopup(e.latlng.lat, e.latlng.lng);
+    } else if (detourStep === 'trace-path') {
         const lat = e.latlng.lat;
         const lng = e.latlng.lng;
 
@@ -624,6 +707,15 @@ function updateDetourStepUI() {
     // Header Back Button Logic
     backBtn.style.display = (detourStep === 'idle' || detourStep === 'select-diverge') ? 'none' : 'block';
 
+    // Lock direction toggle during active detour creation
+    const dirBtns = document.querySelectorAll('.direction-toggle button');
+    dirBtns.forEach(btn => {
+        if (detourStep !== 'idle' && detourStep !== 'select-diverge') btn.classList.add('disabled');
+        else btn.classList.remove('disabled');
+    });
+
+
+
     // Determine back target
     let backTarget: DetourStep | null = null;
     if (detourStep === 'trace-path') backTarget = 'select-diverge';
@@ -687,6 +779,28 @@ function updateDetourStepUI() {
             if (!startInput.value) startInput.value = toLocalISO(now);
             if (!endInput.value) endInput.value = toLocalISO(later);
 
+            // Auto update button text based on time
+            const updateBtnText = () => {
+                const s = new Date(startInput.value).getTime();
+                const n = new Date().getTime();
+                const btn = document.getElementById('activate-detour');
+                if (btn) {
+                    if (s > n + 60000) { // Future > 1 min
+                        btn.innerHTML = '📅 Schedule Detour';
+                        btn.classList.remove('btn-danger'); // Assuming activate is danger from common usage or style
+                        btn.classList.add('btn-primary');
+                    } else {
+                        btn.innerHTML = '⚡ Activate Detour';
+                        btn.classList.remove('btn-primary');
+                        btn.classList.add('btn-danger'); // Assuming danger for immediate action? Or just primary
+                        // Actually style.css defines .btn-primary as green/blue. I'll stick to primary vs maybe accent?
+                        // Let's just use text for now.
+                    }
+                }
+            };
+            startInput.addEventListener('change', updateBtnText);
+            updateBtnText(); // Initial call
+
             showAffectedPatterns();
             break;
     }
@@ -727,8 +841,16 @@ async function findCandidateStops() {
                 fillOpacity: 0.9,
                 className: 'candidate-stop-marker'
             });
-            marker.bindTooltip(`Click to add: ${stop.stop_name}`, { direction: 'top', offset: [0, -5] });
-            marker.on('click', () => {
+            marker.bindTooltip(`Click to add: ${stop.stop_name}`, {
+                direction: 'top',
+                offset: [0, -25], // Increase offset to avoid cursor overlap
+                opacity: 0.9,
+                className: 'candidate-tooltip',
+                sticky: false, // Ensure it's static relative to marker
+                interactive: false // Don't capture mouse events
+            });
+            marker.on('click', (e: any) => {
+                L.DomEvent.stopPropagation(e);
                 addReplacementStop(stop.stop_id, stop.stop_name, stop.stop_lat, stop.stop_lon, false);
                 candidateStopsLayer.removeLayer(marker);
             });
@@ -821,6 +943,8 @@ async function activateDetour() {
         const savedDescription = description;
         const savedStartTime = startTime;
         const savedEndTime = endTime;
+        const savedDivergeStop = divergeStop;
+        const savedRejoinStop = rejoinStop;
 
         const detour = await api.createDetour({
             routeId: selectedRoute.route_id,
@@ -848,8 +972,8 @@ async function activateDetour() {
         const startStr = new Date(savedStartTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         const endStr = new Date(savedEndTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-        const startName = detour.startStopInfo?.stop_name || 'Start';
-        const endName = detour.endStopInfo?.stop_name || 'End';
+        const startName = detour.startStopInfo?.stop_name || savedDivergeStop?.stop_name || 'Start';
+        const endName = detour.endStopInfo?.stop_name || savedRejoinStop?.stop_name || 'End';
 
         routeInfo.innerHTML = `
             <div><strong>Route:</strong> ${savedRoute.route_short_name} ${savedRoute.route_long_name}</div>
@@ -861,9 +985,36 @@ async function activateDetour() {
         // Pre-fill opposite direction data
         const oppDir = savedDirection === 0 ? 1 : 0;
 
+        // Check overlap
+        const dimStart = new Date(savedStartTime).getTime();
+        const dimEnd = new Date(savedEndTime).getTime();
+        // Check overlap - relaxed types
+        const hasOpposite = cachedDetours.some(d =>
+            String(d.routeId) === String(savedRoute.route_id) &&
+            Number(d.directionId) === Number(oppDir) &&
+            new Date(d.endTime).getTime() > dimStart &&
+            new Date(d.startTime).getTime() < dimEnd
+        );
+        console.log('[TDM] Opp check:', { route: savedRoute.route_id, oppDir, hasOpposite, cachedCount: cachedDetours.length });
+
         // Setup Modal Listeners (one-time)
         const btnDismiss = document.getElementById('modal-btn-dismiss')!;
         const btnCreate = document.getElementById('modal-btn-create')!;
+
+        // Update Header Title
+        const headerTitle = modal.querySelector('h3');
+        if (headerTitle) {
+            const isFuture = new Date(savedStartTime).getTime() > Date.now() + 60000;
+            headerTitle.innerHTML = isFuture
+                ? '<span style="color:var(--accent-green)">📅</span> Detour Scheduled'
+                : '<span style="color:var(--accent-green)">✓</span> Detour Activated';
+        }
+
+        if (hasOpposite) {
+            btnCreate.style.display = 'none';
+        } else {
+            btnCreate.style.display = 'inline-block';
+        }
 
         // Clone to remove old listeners
         const newBtnDismiss = btnDismiss.cloneNode(true);
