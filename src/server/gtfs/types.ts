@@ -21,6 +21,8 @@ export interface Trip {
   trip_headsign: string;
   shape_id: string;
   block_id: string;
+  start_time: number;
+  end_time: number;
 }
 
 export interface Stop {

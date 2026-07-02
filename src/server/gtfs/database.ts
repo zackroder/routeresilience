@@ -229,6 +229,60 @@ export class GTFSRepository {
         return rows.map(r => r.shape_id).filter(id => id);
     }
 
+    /**
+     * Get all trips for a specific date, grouped by block_id.
+     * Returns a map of block_id -> Trip[].
+     */
+    getBlocks(dateStr: string): Map<string, (Trip & { start_stop_name: string; end_stop_name: string })[]> {
+        const dayOfWeek = this.getDayColumnName(dateStr);
+
+        const rows = this.db.prepare(`
+            WITH active_trips AS (
+                SELECT t.*
+                FROM trips t
+                JOIN (
+                    SELECT service_id FROM calendar 
+                    WHERE start_date <= ? AND end_date >= ? AND ${dayOfWeek} = 1
+                    UNION
+                    SELECT service_id FROM calendar_dates 
+                    WHERE date = ? AND exception_type = 1
+                    EXCEPT
+                    SELECT service_id FROM calendar_dates 
+                    WHERE date = ? AND exception_type = 2
+                ) active_services ON t.service_id = active_services.service_id
+                WHERE t.block_id IS NOT NULL AND t.block_id != ''
+            )
+            SELECT 
+                at.*,
+                s_start.stop_name as start_stop_name,
+                s_end.stop_name as end_stop_name
+            FROM active_trips at
+            JOIN stop_times st_start ON at.trip_id = st_start.trip_id AND st_start.stop_sequence = (
+                SELECT MIN(stop_sequence) FROM stop_times WHERE trip_id = at.trip_id
+            )
+            JOIN stops s_start ON st_start.stop_id = s_start.stop_id
+            JOIN stop_times st_end ON at.trip_id = st_end.trip_id AND st_end.stop_sequence = (
+                SELECT MAX(stop_sequence) FROM stop_times WHERE trip_id = at.trip_id
+            )
+            JOIN stops s_end ON st_end.stop_id = s_end.stop_id
+            ORDER BY at.block_id, at.start_time
+        `).all(dateStr, dateStr, dateStr, dateStr) as (Trip & { start_stop_name: string; end_stop_name: string })[];
+
+        console.log(`[DEBUG] getBlocks query returned ${rows.length} rows.`);
+        if (rows.length > 0) {
+            console.log('[DEBUG] First row sample:', JSON.stringify(rows[0], null, 2));
+        }
+
+        const blocks = new Map<string, (Trip & { start_stop_name: string; end_stop_name: string })[]>();
+        for (const trip of rows) {
+            if (!blocks.has(trip.block_id)) {
+                blocks.set(trip.block_id, []);
+            }
+            blocks.get(trip.block_id)!.push(trip);
+        }
+        return blocks;
+    }
+
     close(): void {
         this.db.close();
     }

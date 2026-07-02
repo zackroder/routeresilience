@@ -38,7 +38,9 @@
 
   /* ─── Spacing ─── */
   --sidebar-width: 380px;
-  --header-height: 56px;
+  --sidenav-width-collapsed: 50px;
+  --sidenav-width-expanded: 200px;
+  --header-height: 50px;
 
   /* ─── Transitions ─── */
   --transition-fast: 120ms ease;
@@ -89,147 +91,361 @@ body.light-theme {
 html,
 body {
   height: 100%;
-  overflow: hidden;
+  margin: 0;
+  padding: 0;
   font-family: var(--font-family);
   font-size: 14px;
   color: var(--text-primary);
   background: var(--bg-primary);
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  /* Prevent body scroll, let app handle it */
 }
 
 #app {
   display: flex;
-  flex-direction: column;
-  height: 100vh;
+  flex-direction: row;
+  /* Sidebar side-by-side with content */
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
 }
 
-/* ─── Header ─── */
-#header {
-  height: var(--header-height);
+/* ─── Side Navigation ─── */
+#side-nav {
+  width: var(--sidenav-width-collapsed);
   background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  z-index: 2000;
+  transition: width var(--transition-normal);
+  overflow: hidden;
+}
+
+#side-nav.expanded {
+  width: var(--sidenav-width-expanded);
+}
+
+.nav-brand-section {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Centered when collapsed */
+  border-bottom: 1px solid var(--border);
+  padding: 0 10px;
+  gap: 12px;
+}
+
+#side-nav.expanded .nav-brand-section {
+  justify-content: space-between;
+}
+
+.nav-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 4px;
+  transition: background var(--transition-fast);
+}
+
+.nav-logo:hover {
+  background: var(--bg-surface-hover);
+}
+
+.nav-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  display: none;
+  /* Hidden when collapsed? Or just styled differently */
+}
+
+#side-nav.expanded .nav-toggle-btn {
+  display: block;
+}
+
+.nav-items {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+  gap: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  /* More padding */
+  background: transparent;
+  border: none;
+  /* Reset button styles */
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  width: 100%;
+  text-align: left;
+  font-family: var(--font-family);
+  font-size: 13px;
+  position: relative;
+  justify-content: center;
+  /* Center icons when collapsed */
+}
+
+#side-nav.expanded .nav-item {
+  justify-content: flex-start;
+}
+
+.nav-item:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  color: var(--accent-blue);
+  background: var(--accent-blue-dim);
+  border-right: 2px solid var(--accent-blue);
+}
+
+.nav-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.nav-label {
+  margin-left: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  display: none;
+}
+
+#side-nav.expanded .nav-label {
+  display: block;
+  opacity: 1;
+}
+
+.nav-badge {
+  margin-left: auto;
+  background: var(--accent-red);
+  color: white;
+  font-size: 10px;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 8px;
+  display: none;
+  /* Hide in collapsed unless absolute? */
+}
+
+#side-nav.expanded .nav-badge {
+  display: inline-block;
+}
+
+/* Badge dot for collapsed state? */
+.nav-item.has-badge::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  display: block;
+}
+
+#side-nav.expanded .nav-item.has-badge::after {
+  display: none;
+  /* Use real badge */
+}
+
+
+.nav-footer {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+/* ─── Content Layout ─── */
+#content-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Prevent flex overflow */
+}
+
+#top-bar {
+  height: 60px;
+  /* Slightly taller */
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
-  z-index: 1000;
+  padding: 0 24px;
   flex-shrink: 0;
 }
 
-.header-brand {
+.header-title h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.5px;
+}
+
+/* Status Pill */
+.status-pill {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.header-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, var(--accent-blue), #6366f1);
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  box-shadow: var(--shadow-glow-blue);
-}
-
-.header-brand h1 {
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: -0.3px;
-}
-
-.header-subtitle {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-weight: 400;
-}
-
-.header-status {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  background: var(--bg-secondary);
+  padding: 6px 16px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 500;
   color: var(--text-secondary);
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
+  background: var(--text-muted);
   border-radius: 50%;
-  background: var(--accent-orange);
-  animation: pulse 2s infinite;
+  box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+  transition: all 0.3s ease;
 }
 
 .status-dot.connected {
   background: var(--accent-green);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+  animation: pulse-green 2s infinite;
 }
 
-@keyframes pulse {
+@keyframes pulse-green {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  }
 
-  0%,
+  70% {
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0);
+  }
+
   100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.5;
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
   }
 }
 
-.status-stats {
+.status-divider {
+  color: var(--border-strong);
+  font-weight: 300;
+}
+
+.stat-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-  font-weight: 500;
+  gap: 6px;
 }
 
-.stat-divider {
-  opacity: 0.3;
+.stat-icon {
+  font-size: 14px;
 }
 
-/* ─── Main Layout ─── */
-#main {
-  display: flex;
+.stat-item strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+#main-view {
   flex: 1;
-  overflow: hidden;
   position: relative;
-}
-
-/* ─── Sidebar ─── */
-#sidebar {
-  width: var(--sidebar-width);
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   display: flex;
+  /* Key for ensuring children fill */
+}
+
+.view-container {
+  width: 100%;
+  height: 100%;
+  display: none;
+}
+
+.view-container.active {
+  display: flex;
+  /* Map View needs flex */
+}
+
+/* Map View Specifics */
+#view-map {
+  display: none;
+  /* toggle handles this */
+  flex-direction: row;
+  /* Sidebar + Map */
+}
+
+#view-map.active {
+  display: flex;
+}
+
+#sidebar {
+  /* Existing sidebar styles adjust: no top border needed? */
+  border-top: none;
+}
+
+/* Block Viewer Adjustments */
+#view-blocks {
+  display: none;
   flex-direction: column;
-  gap: 1px;
-  flex-shrink: 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--bg-surface-active) transparent;
+  background: var(--bg-primary);
 }
 
-#sidebar::-webkit-scrollbar {
-  width: 4px;
+#view-blocks.active {
+  display: flex;
 }
 
-#sidebar::-webkit-scrollbar-thumb {
-  background: var(--bg-surface-active);
-  border-radius: 2px;
+/* Cancelled View */
+#view-cancelled {
+  background: var(--bg-primary);
+  overflow: hidden;
+  /* Panel handles scroll */
 }
 
+#view-cancelled.active {
+  display: block;
+}
 
+/* Cancelled Grid */
+.cancelled-trip-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  transition: all var(--transition-fast);
+}
+
+.cancelled-trip-card:hover {
+  border-color: var(--accent-red);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Detoured Trip Highlight */
+.trip-bar.detoured {
+  background: var(--accent-orange) !important;
+  border: 1px solid rgba(0, 0, 0, 0.2) !important;
+  background-image: repeating-linear-gradient(45deg,
+      transparent,
+      transparent 5px,
+      rgba(0, 0, 0, 0.1) 5px,
+      rgba(0, 0, 0, 0.1) 10px) !important;
+}
 
 #map-container {
   flex: 1;
@@ -237,7 +453,6 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  /* Prevent flex overflow */
 }
 
 #map {
@@ -539,9 +754,13 @@ h3 {
 
 /* ─── Buttons ─── */
 .btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--accent-blue);
+  /* background: rgba(59, 130, 246, 0.1); */
+  /* border-radius: 8px; */
+  /* margin-right: 12px; */
   gap: 8px;
   padding: 9px 16px;
   border: none;
@@ -659,7 +878,7 @@ h3 {
 }
 
 .detour-card-description {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
@@ -1399,4 +1618,265 @@ body.light-theme .modal-overlay {
   opacity: 0.5;
   pointer-events: none;
   cursor: not-allowed;
+}
+
+/* ─── Block Viewer ─── */
+#block-view-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+  position: relative;
+}
+
+.block-view-header {
+  height: 56px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+
+.block-view-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.date-input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-family: var(--font-family);
+  font-size: 13px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.cancelled-summary-widget {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.btn-primary-header {
+  background: var(--accent-blue);
+  color: white;
+  border: none;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.btn-primary-header:hover {
+  background: var(--accent-blue-hover);
+}
+
+.legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  /* background set inline */
+}
+
+.block-view-content {
+  flex: 1;
+  overflow: auto;
+  /* Handle both axes here */
+  position: relative;
+  /* background: var(--bg-primary); */
+}
+
+/* Timeline Grid */
+
+/* Timeline Grid Container */
+.block-chart-container {
+  position: relative;
+  /* dynamic width set by JS */
+  display: flex;
+  flex-direction: column;
+  /* Ensure container doesn't collapse */
+  min-height: 100%;
+}
+
+.timeline-header {
+  height: 30px;
+  background: var(--bg-primary);
+  /* Ensure opacity */
+  position: sticky;
+  top: 0;
+  z-index: 2000;
+  /* Super high */
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  padding-left: 80px;
+  /* Space for sticky block labels */
+  width: fit-content;
+  /* Grow with content */
+  min-width: 100%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.time-scale {
+  position: relative;
+  height: 100%;
+  /* width set by JS */
+}
+
+.time-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 30px;
+  white-space: nowrap;
+}
+
+.block-row {
+  display: flex;
+  height: 44px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  width: fit-content;
+  /* Grow with content */
+  min-width: 100%;
+}
+
+.block-label {
+  width: 80px;
+  flex-shrink: 0;
+  background: var(--bg-primary);
+  /* Ensure opacity */
+  border-right: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  font-weight: 600;
+  position: sticky;
+  left: 0;
+  z-index: 1000;
+  /* Above content, below header */
+  box-shadow: 1px 0 2px rgba(0, 0, 0, 0.05);
+}
+
+.block-track {
+  flex-grow: 1;
+  background: var(--bg-primary);
+  position: relative;
+  z-index: 10;
+  /* Width will be controlled by container */
+}
+
+/* Hour grid lines within track */
+.grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.trip-bar {
+  position: absolute;
+  top: 10px;
+  height: 24px;
+  border-radius: 4px;
+  background: var(--accent-blue);
+  color: white;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  transition: transform 0.1s, box-shadow 0.1s;
+  z-index: 10;
+}
+
+
+.trip-bar:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+.trip-bar.cancelled {
+  background: repeating-linear-gradient(45deg,
+      rgba(239, 68, 68, 0.1),
+      rgba(239, 68, 68, 0.1) 10px,
+      rgba(15, 17, 23, 0.3) 10px,
+      rgba(15, 17, 23, 0.3) 20px);
+  border: 1px solid var(--accent-red);
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+/* Popover for Trip Actions */
+.trip-popover {
+  position: absolute;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+  min-width: 220px;
+}
+
+.trip-popover h4 {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.trip-popover p {
+  margin: 0 0 12px 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.trip-popover-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ─── Sidebar Fixes ─── */
+#sidebar {
+  width: var(--sidebar-width);
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+  height: 100%;
+  /* Ensure it fills parent */
 }

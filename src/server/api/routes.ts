@@ -6,6 +6,7 @@ import { DetourStore } from '../detour/store.js';
 import { CreateDetourRequest } from '../detour/types.js';
 import { SimulationEngine } from '../simulation/engine.js';
 import { FeedGenerator } from '../realtime/feed.js';
+import { CancellationStore } from '../detour/cancellations.js';
 
 export function createApiRouter(
     repo: GTFSRepository,
@@ -13,10 +14,111 @@ export function createApiRouter(
     detourStore: DetourStore,
     simulation: SimulationEngine,
     feedGenerator: FeedGenerator,
+    cancellationStore: CancellationStore,
 ): Router {
     const router = Router();
 
-    // ─── GTFS Data Routes ───
+    // ─── Block / Cancellation Routes ───
+
+    /** Get blocks for today (or specific date) */
+    router.get('/blocks', (req: Request, res: Response) => {
+        const dateStr = (req.query.date as string) || new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        const blocks = repo.getBlocks(dateStr);
+
+        // Get all active detours to check against
+        // Note: This is a simplification. Ideally we check specific date. 
+        // But detours are stored with full ISO timestamps, so we can check overlap.
+        const allDetours = detourStore.getAll(); // In-memory, fast enough
+
+        // Convert Map to array of objects
+        const result = Array.from(blocks.entries()).map(([blockId, trips]) => ({
+            block_id: blockId,
+            trips: trips.map(t => {
+                // Check for detour overlap
+                // Trip times are seconds from midnight (e.g. 36000 = 10am)
+                // Detour times are ISO strings. We need to convert detour times to seconds-from-midnight relative to the requested date.
+                // Or easier: Convert trip times to full Date objects for comparison? 
+                // Let's rely on the requested date.
+
+                let isDetoured = false;
+
+                // Parse the requested date (YYYYMMDD)
+                const y = parseInt(dateStr.slice(0, 4));
+                const m = parseInt(dateStr.slice(4, 6)) - 1;
+                const d = parseInt(dateStr.slice(6, 8));
+
+                // Trip Start Time (absolute)
+                const tripStart = new Date(y, m, d, 0, 0, 0);
+                tripStart.setSeconds(t.start_time);
+
+                // Trip End Time (absolute)
+                const tripEnd = new Date(y, m, d, 0, 0, 0);
+                tripEnd.setSeconds(t.end_time);
+
+                // Check detours
+                for (const dt of allDetours) {
+                    if (dt.routeId === t.route_id && dt.directionId === t.direction_id) {
+                        const dStart = new Date(dt.startTime);
+                        const dEnd = new Date(dt.endTime);
+
+                        // Check overlap
+                        if (tripStart < dEnd && tripEnd > dStart) {
+                            isDetoured = true;
+                            break;
+                        }
+                    }
+                }
+
+                return {
+                    trip_id: t.trip_id,
+                    route_id: t.route_id,
+                    direction_id: t.direction_id,
+                    // service_id: t.service_id, // Optimized out
+                    start_time: t.start_time,
+                    end_time: t.end_time,
+                    trip_headsign: t.trip_headsign,
+                    is_cancelled: cancellationStore.isCancelled(t.trip_id),
+                    is_detoured: isDetoured,
+                    start_stop_name: t.start_stop_name,
+                    end_stop_name: t.end_stop_name
+                };
+            })
+        }));
+
+        res.json(result);
+    });
+
+    /** Get all cancelled trip IDs with details */
+    router.get('/cancellations', (_req: Request, res: Response) => {
+        const ids = cancellationStore.getAllCancelled();
+        const details = ids.map(id => {
+            const trip = repo.getTrip(id);
+            if (!trip) return { trip_id: id, status: 'UNKNOWN' };
+            const route = repo.getRoute(trip.route_id);
+            return {
+                trip_id: id,
+                route_id: trip.route_id,
+                route_short_name: route?.route_short_name,
+                direction_id: trip.direction_id,
+                trip_headsign: trip.trip_headsign,
+                start_time: trip.start_time,
+                end_time: trip.end_time
+            };
+        });
+        res.json(details);
+    });
+
+    /** Cancel a trip */
+    router.post('/trips/:id/cancel', (req: Request, res: Response) => {
+        cancellationStore.cancelTrip(req.params.id);
+        res.json({ success: true, trip_id: req.params.id, status: 'CANCELED' });
+    });
+
+    /** Restore a trip */
+    router.post('/trips/:id/restore', (req: Request, res: Response) => {
+        cancellationStore.restoreTrip(req.params.id);
+        res.json({ success: true, trip_id: req.params.id, status: 'RESTORED' });
+    });
 
     /** List all bus routes */
     router.get('/routes', (_req: Request, res: Response) => {
@@ -28,6 +130,7 @@ export function createApiRouter(
             route_text_color: r.route_text_color,
             directions: r.directions,
         }));
+
         routes.sort((a, b) => {
             const aNum = parseInt(a.route_short_name);
             const bNum = parseInt(b.route_short_name);
