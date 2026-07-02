@@ -1,8 +1,6 @@
-import { GTFSData, parseGTFSTime } from '../gtfs/types.js';
-import { getActiveTripsForDate, isServiceActiveOnDate } from '../gtfs/loader.js';
+import { GTFSRepository } from '../gtfs/database.js';
 import { DetourEngine, ModifiedTrip } from '../detour/engine.js';
 import { DetourStore } from '../detour/store.js';
-import { Detour } from '../detour/types.js';
 import { SimulationEngine } from '../simulation/engine.js';
 import { PredictionEngine, TripPrediction } from './predictions.js';
 import { encodeFeedMessage } from './proto.js';
@@ -11,14 +9,10 @@ import { encodeFeedMessage } from './proto.js';
  * GTFS-RT Feed Generator
  * 
  * Generates a complete GTFS-RT feed containing:
- * 1. TripUpdate entities for ALL active trips (baseline real-time predictions)
- * 2. VehiclePosition entities for all tracked vehicles
- * 3. TripModifications entities for active detours (experimental)
- * 4. ServiceAlert entities for active detours (standard fallback)
- * 5. Shape entities for detour geometries
- * 6. Stop entities for temporary stops
- * 
- * The feed is regenerated on demand and cached for efficiency.
+ * 1. VehiclePosition entities for all tracked vehicles
+ * 2. TripUpdate entities for ALL active trips
+ * 3. TripModifications entities for active detours
+ * 4. ServiceAlert entities
  */
 
 // Cache for the compiled feed
@@ -29,7 +23,7 @@ const CACHE_TTL_MS = 1_000; // 1 second
 
 export class FeedGenerator {
     constructor(
-        private gtfs: GTFSData,
+        private repo: GTFSRepository,
         private detourEngine: DetourEngine,
         private detourStore: DetourStore,
         private simulation: SimulationEngine,
@@ -72,6 +66,7 @@ export class FeedGenerator {
         const entities: any[] = [];
         const nowEpoch = Math.floor(now.getTime() / 1000);
         const dateStr = this.formatDateStr(now);
+        const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
         let entityId = 1;
 
         // Get all modified trips from active detours
@@ -109,28 +104,23 @@ export class FeedGenerator {
         }
 
         // ─── 2. TripUpdate entities for ALL active trips ───
-        // First, handle non-modified trips with standard predictions
-        for (const [tripId, trip] of this.gtfs.trips) {
-            if (modifiedTrips.has(tripId)) continue; // handled below
-            if (!isServiceActiveOnDate(this.gtfs, trip.service_id, dateStr)) continue;
+        const activeTrips = this.repo.getActiveTrips(dateStr, nowSeconds);
 
-            const stopTimes = this.gtfs.stopTimesByTrip.get(tripId);
+        for (const trip of activeTrips) {
+            // If trip is modified, it's handled in the modified section
+            if (modifiedTrips.has(trip.trip_id)) continue;
+
+            const stopTimes = this.repo.getStopTimes(trip.trip_id);
             if (!stopTimes || stopTimes.length === 0) continue;
 
-            // Check if this trip should be active right now (within its time window)
-            const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-            const firstDeparture = parseGTFSTime(stopTimes[0].departure_time);
-            const lastArrival = parseGTFSTime(stopTimes[stopTimes.length - 1].arrival_time);
-            if (nowSeconds < firstDeparture - 300 || nowSeconds > lastArrival + 300) continue; // ±5min buffer
-
-            const prediction = this.predictions.predictTrip(tripId, now);
+            const prediction = this.predictions.predictTrip(trip.trip_id, now);
             if (!prediction) continue;
 
             entities.push({
                 id: String(entityId++),
                 tripUpdate: {
                     trip: {
-                        tripId: tripId,
+                        tripId: trip.trip_id,
                         routeId: trip.route_id,
                         directionId: trip.direction_id,
                         scheduleRelationship: 0, // SCHEDULED
@@ -149,7 +139,7 @@ export class FeedGenerator {
 
         // ─── 3. TripUpdate entities for MODIFIED trips (detoured) ───
         for (const [tripId, modTrip] of modifiedTrips) {
-            const trip = this.gtfs.trips.get(tripId);
+            const trip = this.repo.getTrip(tripId);
             if (!trip) continue;
 
             entities.push({

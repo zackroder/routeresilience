@@ -1,7 +1,6 @@
-import { GTFSData, parseGTFSTime, formatGTFSTime } from '../gtfs/types.js';
+import { GTFSRepository } from '../gtfs/database.js';
 import { haversineMeters } from '../gtfs/loader.js';
 import { SimulationEngine } from '../simulation/engine.js';
-import { VehicleState } from '../simulation/types.js';
 
 /**
  * Prediction engine: computes ETA predictions for each active trip.
@@ -27,20 +26,18 @@ export interface TripPrediction {
 
 export class PredictionEngine {
     constructor(
-        private gtfs: GTFSData,
+        private repo: GTFSRepository,
         private simulation: SimulationEngine,
     ) { }
 
     /**
      * Generate predictions for a single trip.
-     * If we have a live vehicle position, predictions are based on distance remaining
-     * along the shape. Otherwise, we fall back to the static schedule.
      */
     predictTrip(tripId: string, now: Date = new Date()): TripPrediction | null {
-        const trip = this.gtfs.trips.get(tripId);
+        const trip = this.repo.getTrip(tripId);
         if (!trip) return null;
 
-        const stopTimes = this.gtfs.stopTimesByTrip.get(tripId);
+        const stopTimes = this.repo.getStopTimes(tripId);
         if (!stopTimes || stopTimes.length === 0) return null;
 
         const vehicle = this.simulation.getVehicleForTrip(tripId);
@@ -53,37 +50,27 @@ export class PredictionEngine {
             // ─── Real-time predictions based on vehicle position ───
             const vehicleLat = vehicle.lat;
             const vehicleLon = vehicle.lon;
-            const vehicleSpeed = Math.max(vehicle.speed, 3); // min 3 m/s (~7mph) to avoid infinite ETAs
-
-            // For each stop, estimate based on remaining distance
-            const shape = this.gtfs.shapePoints.get(trip.shape_id);
+            const vehicleSpeed = Math.max(vehicle.speed, 3); // min 3 m/s
 
             for (let i = 0; i < stopTimes.length; i++) {
                 const st = stopTimes[i];
-                const stop = this.gtfs.stops.get(st.stop_id);
+                const stop = this.repo.getStop(st.stop_id);
                 if (!stop) continue;
 
                 if (i <= vehicle.currentStopIndex) {
-                    // Already passed — use actual time (schedule + delay)
-                    const scheduledArrival = parseGTFSTime(st.arrival_time);
-                    const scheduledDeparture = parseGTFSTime(st.departure_time);
                     predictions.push({
                         stopId: st.stop_id,
                         stopSequence: st.stop_sequence,
-                        arrivalTime: midnightEpoch + scheduledArrival,
-                        departureTime: midnightEpoch + scheduledDeparture,
+                        arrivalTime: midnightEpoch + st.arrival_time,
+                        departureTime: midnightEpoch + st.departure_time,
                         isRealtime: false,
                     });
                 } else {
-                    // Upcoming — estimate based on distance
                     const distToStop = haversineMeters(vehicleLat, vehicleLon, stop.stop_lat, stop.stop_lon);
-
-                    // Use a more sophisticated estimate: straight-line distance * route factor
-                    const routeFactor = 1.3; // actual route distance is typically 1.3x straight-line
+                    const routeFactor = 1.3;
                     const estimatedTravelTime = (distToStop * routeFactor) / vehicleSpeed;
-
                     const estimatedArrival = nowEpoch + Math.round(estimatedTravelTime);
-                    const estimatedDeparture = estimatedArrival + 20; // 20s dwell estimate
+                    const estimatedDeparture = estimatedArrival + 20;
 
                     predictions.push({
                         stopId: st.stop_id,
@@ -95,15 +82,13 @@ export class PredictionEngine {
                 }
             }
         } else {
-            // ─── Schedule-based predictions (no vehicle tracking) ───
+            // ─── Schedule-based predictions ───
             for (const st of stopTimes) {
-                const scheduledArrival = parseGTFSTime(st.arrival_time);
-                const scheduledDeparture = parseGTFSTime(st.departure_time);
                 predictions.push({
                     stopId: st.stop_id,
                     stopSequence: st.stop_sequence,
-                    arrivalTime: midnightEpoch + scheduledArrival,
-                    departureTime: midnightEpoch + scheduledDeparture,
+                    arrivalTime: midnightEpoch + st.arrival_time,
+                    departureTime: midnightEpoch + st.departure_time,
                     isRealtime: false,
                 });
             }
@@ -120,16 +105,13 @@ export class PredictionEngine {
 
     /**
      * Generate predictions for modified trips (under a detour).
-     * Uses the modified stop sequence from the detour engine.
      */
     predictModifiedTrip(
         tripId: string,
+        routeId: string,
         modifiedStops: { stopId: string; stopSequence: number; arrivalTime: number; departureTime: number; lat: number; lon: number }[],
         now: Date = new Date(),
     ): TripPrediction | null {
-        const trip = this.gtfs.trips.get(tripId);
-        if (!trip) return null;
-
         const vehicle = this.simulation.getVehicleForTrip(tripId);
         const nowEpoch = Math.floor(now.getTime() / 1000);
         const midnightEpoch = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000);
@@ -164,7 +146,7 @@ export class PredictionEngine {
 
         return {
             tripId,
-            routeId: trip.route_id,
+            routeId,
             vehicleId: vehicle?.vehicleId || null,
             predictions,
             timestamp: nowEpoch,

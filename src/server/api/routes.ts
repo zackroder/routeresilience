@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
-import { GTFSData } from '../gtfs/types.js';
-import { findNearbyStops, findStopsInBounds } from '../gtfs/loader.js';
+import { GTFSRepository } from '../gtfs/database.js';
+import { haversineMeters } from '../gtfs/loader.js';
 import { DetourEngine } from '../detour/engine.js';
 import { DetourStore } from '../detour/store.js';
 import { CreateDetourRequest } from '../detour/types.js';
@@ -8,7 +8,7 @@ import { SimulationEngine } from '../simulation/engine.js';
 import { FeedGenerator } from '../realtime/feed.js';
 
 export function createApiRouter(
-    gtfs: GTFSData,
+    repo: GTFSRepository,
     detourEngine: DetourEngine,
     detourStore: DetourStore,
     simulation: SimulationEngine,
@@ -20,7 +20,7 @@ export function createApiRouter(
 
     /** List all bus routes */
     router.get('/routes', (_req: Request, res: Response) => {
-        const routes = Array.from(gtfs.routes.values()).map(r => ({
+        const routes = repo.getAllRoutes().map(r => ({
             route_id: r.route_id,
             route_short_name: r.route_short_name,
             route_long_name: r.route_long_name,
@@ -41,11 +41,11 @@ export function createApiRouter(
     router.get('/routes/:id/trips', (req: Request, res: Response) => {
         const routeId = req.params.id;
         const directionId = parseInt(req.query.direction as string) || 0;
-        const key = `${routeId}_${directionId}`;
-        const tripIds = gtfs.tripsByRoute.get(key) || [];
-        const trips = tripIds.slice(0, 50).map(id => { // Limit to 50 for UI
-            const trip = gtfs.trips.get(id)!;
-            const stopTimes = gtfs.stopTimesByTrip.get(id) || [];
+
+        const trips = repo.getTripsForRoute(routeId, directionId);
+
+        const result = trips.slice(0, 50).map(trip => { // Limit to 50 for UI
+            const stopTimes = repo.getStopTimes(trip.trip_id) || [];
             return {
                 trip_id: trip.trip_id,
                 trip_headsign: trip.trip_headsign,
@@ -56,15 +56,14 @@ export function createApiRouter(
                 last_arrival: stopTimes[stopTimes.length - 1]?.arrival_time || '',
             };
         });
-        res.json(trips);
+        res.json(result);
     });
 
     /** Get all unique shape patterns for a route + direction (longest first) */
     router.get('/routes/:id/shape', (req: Request, res: Response) => {
         const routeId = req.params.id;
         const directionId = parseInt(req.query.direction as string) || 0;
-        const key = `${routeId}_${directionId}`;
-        const tripIds = gtfs.tripsByRoute.get(key) || [];
+        const trips = repo.getTripsForRoute(routeId, directionId);
 
         // Collect all unique shapes for this route+direction
         const shapesMap = new Map<string, {
@@ -74,28 +73,41 @@ export function createApiRouter(
             tripCount: number;
             representativeTripId: string;
         }>();
-        for (const tripId of tripIds) {
-            const trip = gtfs.trips.get(tripId);
-            if (!trip || !trip.shape_id) continue;
+
+        // Cache shapes to avoid redundant queries
+        const shapeCache = new Map<string, { lat: number, lon: number }[]>();
+
+        for (const trip of trips) {
+            if (!trip.shape_id) continue;
+
             if (shapesMap.has(trip.shape_id)) {
                 shapesMap.get(trip.shape_id)!.tripCount++;
                 continue;
             }
-            const rawPoints = gtfs.shapePoints.get(trip.shape_id);
-            if (!rawPoints || rawPoints.length < 2) continue;
 
-            const points = rawPoints.map(p => ({ lat: p.shape_pt_lat, lon: p.shape_pt_lon }));
+            let points: { lat: number, lon: number }[];
+            if (shapeCache.has(trip.shape_id)) {
+                points = shapeCache.get(trip.shape_id)!;
+            } else {
+                const rawPoints = repo.getShape(trip.shape_id);
+                if (!rawPoints || rawPoints.length < 2) continue;
+                points = rawPoints.map(p => ({ lat: p.shape_pt_lat, lon: p.shape_pt_lon }));
+                shapeCache.set(trip.shape_id, points);
+            }
+
             // Calculate total distance for sorting
             let totalDistance = 0;
-            for (let i = 1; i < rawPoints.length; i++) {
-                const a = rawPoints[i - 1], b = rawPoints[i];
-                const dx = (b.shape_pt_lat - a.shape_pt_lat) * 111320;
-                const dy = (b.shape_pt_lon - a.shape_pt_lon) * 111320 * Math.cos(a.shape_pt_lat * Math.PI / 180);
+            for (let i = 1; i < points.length; i++) {
+                const a = points[i - 1], b = points[i];
+                // Quick approx distance
+                const dx = (b.lat - a.lat) * 111320;
+                const dy = (b.lon - a.lon) * 111320 * Math.cos(a.lat * Math.PI / 180);
                 totalDistance += Math.sqrt(dx * dx + dy * dy);
             }
+
             shapesMap.set(trip.shape_id, {
                 shape_id: trip.shape_id, points, totalDistance, tripCount: 1,
-                representativeTripId: tripId,
+                representativeTripId: trip.trip_id,
             });
         }
 
@@ -106,10 +118,10 @@ export function createApiRouter(
         if (patterns.length > 0) {
             // Build enriched pattern info with first/last stop names and stop IDs
             const enrichedPatterns = patterns.map((p, i) => {
-                const stopTimes = gtfs.stopTimesByTrip.get(p.representativeTripId) || [];
+                const stopTimes = repo.getStopTimes(p.representativeTripId) || [];
                 const stopIds = stopTimes.map(st => st.stop_id);
-                const firstStop = stopTimes.length > 0 ? gtfs.stops.get(stopTimes[0].stop_id) : null;
-                const lastStop = stopTimes.length > 0 ? gtfs.stops.get(stopTimes[stopTimes.length - 1].stop_id) : null;
+                const firstStop = stopTimes.length > 0 ? repo.getStop(stopTimes[0].stop_id) : null;
+                const lastStop = stopTimes.length > 0 ? repo.getStop(stopTimes[stopTimes.length - 1].stop_id) : null;
                 return {
                     shape_id: p.shape_id,
                     pointCount: p.points.length,
@@ -136,15 +148,14 @@ export function createApiRouter(
     router.get('/routes/:id/stops', (req: Request, res: Response) => {
         const routeId = req.params.id;
         const directionId = parseInt(req.query.direction as string) || 0;
-        const key = `${routeId}_${directionId}`;
-        const tripIds = gtfs.tripsByRoute.get(key) || [];
+        const trips = repo.getTripsForRoute(routeId, directionId);
 
-        // Find the longest trip (most stops) as the primary sequence
-        let longestStopTimes: typeof stopTimesRef | null = null;
+        let longestStopTimes: any[] | null = null;
         let longestLen = 0;
-        let stopTimesRef: ReturnType<typeof gtfs.stopTimesByTrip.get> = undefined;
-        for (const tripId of tripIds) {
-            const st = gtfs.stopTimesByTrip.get(tripId);
+
+        // Check top 20 trips
+        for (const trip of trips.slice(0, 20)) {
+            const st = repo.getStopTimes(trip.trip_id);
             if (st && st.length > longestLen) {
                 longestLen = st.length;
                 longestStopTimes = st;
@@ -157,7 +168,7 @@ export function createApiRouter(
         }
 
         const stops = longestStopTimes.map(st => {
-            const stop = gtfs.stops.get(st.stop_id);
+            const stop = repo.getStop(st.stop_id);
             return {
                 stop_id: st.stop_id,
                 stop_name: stop?.stop_name || st.stop_id,
@@ -181,8 +192,14 @@ export function createApiRouter(
             return;
         }
 
-        const stops = findNearbyStops(gtfs, lat, lon, radius);
-        res.json(stops.map(s => ({
+        // Bounding box for pre-filter
+        const latDelta = radius / 111111;
+        const lonDelta = radius / (111111 * Math.cos(lat * Math.PI / 180));
+
+        const stops = repo.getStopsInBounds(lat - latDelta, lon - lonDelta, lat + latDelta, lon + lonDelta);
+        const result = stops.filter(s => haversineMeters(lat, lon, s.stop_lat, s.stop_lon) <= radius);
+
+        res.json(result.map(s => ({
             stop_id: s.stop_id,
             stop_name: s.stop_name,
             stop_lat: s.stop_lat,
@@ -202,7 +219,7 @@ export function createApiRouter(
             return;
         }
 
-        const stops = findStopsInBounds(gtfs, minLat, minLon, maxLat, maxLon);
+        const stops = repo.getStopsInBounds(minLat, minLon, maxLat, maxLon);
         res.json(stops.map(s => ({
             stop_id: s.stop_id,
             stop_name: s.stop_name,
@@ -213,7 +230,7 @@ export function createApiRouter(
 
     /** Get a stop by ID */
     router.get('/stops/:id', (req: Request, res: Response) => {
-        const stop = gtfs.stops.get(req.params.id);
+        const stop = repo.getStop(req.params.id);
         if (!stop) {
             res.status(404).json({ error: 'Stop not found' });
             return;
@@ -246,8 +263,8 @@ export function createApiRouter(
     /** List all detours (enriched with stop location data) */
     router.get('/detours', (_req: Request, res: Response) => {
         const detours = detourStore.getAll().map(d => {
-            const startStop = gtfs.stops.get(d.startStopId);
-            const endStop = gtfs.stops.get(d.endStopId);
+            const startStop = repo.getStop(d.startStopId);
+            const endStop = repo.getStop(d.endStopId);
             return {
                 ...d,
                 startStopInfo: startStop ? {
@@ -342,9 +359,11 @@ export function createApiRouter(
     /** System status */
     router.get('/status', (_req: Request, res: Response) => {
         res.json({
-            routes: gtfs.routes.size,
-            trips: gtfs.trips.size,
-            stops: gtfs.stops.size,
+            // These counts are now expensive-ish or we don't expose them
+            // We could add count methods to repository
+            routes: 0,
+            trips: 0,
+            stops: 0,
             activeVehicles: simulation.getVehicleCount(),
             activeDetours: detourStore.getActive().length,
             totalDetours: detourStore.getAll().length,

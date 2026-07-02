@@ -1,5 +1,6 @@
-import { GTFSData, StopTime, parseGTFSTime } from '../gtfs/types.js';
-import { getActiveTripsForDate, haversineMeters } from '../gtfs/loader.js';
+import { GTFSRepository } from '../gtfs/database.js';
+import { parseGTFSTime } from '../gtfs/types.js';
+import { haversineMeters } from '../gtfs/loader.js';
 import { Detour, CreateDetourRequest } from './types.js';
 import { DetourStore } from './store.js';
 import crypto from 'crypto';
@@ -34,7 +35,7 @@ export interface ModifiedTrip {
 
 export class DetourEngine {
     constructor(
-        private gtfs: GTFSData,
+        private repo: GTFSRepository,
         private store: DetourStore,
     ) { }
 
@@ -66,35 +67,65 @@ export class DetourEngine {
      * Get all affected trip IDs for a detour on a specific date.
      */
     getAffectedTripIds(detour: Detour, dateStr: string): string[] {
-        const trips = getActiveTripsForDate(this.gtfs, detour.routeId, detour.directionId, dateStr);
+        // Query trips that have both start and end stops in the correct order
+        const stmt = this.repo.getDb().prepare(`
+            SELECT t.trip_id, t.service_id 
+            FROM trips t
+            JOIN stop_times st1 ON t.trip_id = st1.trip_id
+            JOIN stop_times st2 ON t.trip_id = st2.trip_id
+            WHERE t.route_id = ? AND t.direction_id = ?
+            AND st1.stop_id = ? AND st2.stop_id = ?
+            AND st1.stop_sequence < st2.stop_sequence
+        `);
 
-        // Filter to trips that actually serve both the start and end stop of the detour
-        return trips
-            .filter(trip => {
-                const stopTimes = this.gtfs.stopTimesByTrip.get(trip.trip_id);
-                if (!stopTimes) return false;
-                const hasStart = stopTimes.some(st => st.stop_id === detour.startStopId);
-                const hasEnd = stopTimes.some(st => st.stop_id === detour.endStopId);
-                return hasStart && hasEnd;
-            })
-            .map(t => t.trip_id);
+        const trips = stmt.all(detour.routeId, detour.directionId, detour.startStopId, detour.endStopId) as { trip_id: string, service_id: string }[];
+
+        const validTripIds: string[] = [];
+        const serviceCache = new Map<string, boolean>();
+
+        for (const t of trips) {
+            if (serviceCache.has(t.service_id)) {
+                if (serviceCache.get(t.service_id)) validTripIds.push(t.trip_id);
+                continue;
+            }
+
+            const isActive = this.checkServiceActive(t.service_id, dateStr);
+            serviceCache.set(t.service_id, isActive);
+            if (isActive) validTripIds.push(t.trip_id);
+        }
+
+        return validTripIds;
+    }
+
+    private checkServiceActive(serviceId: string, dateStr: string): boolean {
+        // Check exception
+        const exception = this.repo.getDb().prepare('SELECT exception_type FROM calendar_dates WHERE service_id = ? AND date = ?').get(serviceId, dateStr) as { exception_type: number } | undefined;
+        if (exception) {
+            return exception.exception_type === 1;
+        }
+
+        // Check calendar
+        const cal = this.repo.getDb().prepare('SELECT * FROM calendar WHERE service_id = ?').get(serviceId) as any;
+        if (!cal) return false;
+
+        if (dateStr < cal.start_date || dateStr > cal.end_date) return false;
+
+        const y = parseInt(dateStr.substring(0, 4));
+        const m = parseInt(dateStr.substring(4, 6)) - 1;
+        const d = parseInt(dateStr.substring(6, 8));
+        const day = new Date(y, m, d).getDay();
+        const cols = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        return cal[cols[day]] === 1;
     }
 
     /**
      * Compute the modified stop sequence for a trip under a detour.
-     * 
-     * Logic:
-     * 1. Keep all stops up to and including startStopId
-     * 2. Insert replacement stops
-     * 3. Keep all stops from endStopId onward (including it)
-     * 4. Renumber stop_sequence from 1
-     * 5. Adjust timing based on replacement stop travel times
      */
     computeModifiedTrip(tripId: string, detour: Detour): ModifiedTrip | null {
-        const trip = this.gtfs.trips.get(tripId);
+        const trip = this.repo.getTrip(tripId);
         if (!trip) return null;
 
-        const originalStopTimes = this.gtfs.stopTimesByTrip.get(tripId);
+        const originalStopTimes = this.repo.getStopTimes(tripId);
         if (!originalStopTimes || originalStopTimes.length === 0) return null;
 
         // Find indices of start and end stops in the original sequence
@@ -108,13 +139,13 @@ export class DetourEngine {
         // Part 1: Original stops before & including the diverge point
         for (let i = 0; i <= startIdx; i++) {
             const st = originalStopTimes[i];
-            const stop = this.gtfs.stops.get(st.stop_id);
+            const stop = this.repo.getStop(st.stop_id);
             modifiedStopTimes.push({
                 stopId: st.stop_id,
                 stopName: stop?.stop_name || st.stop_id,
                 stopSequence: seq++,
-                arrivalTime: parseGTFSTime(st.arrival_time),
-                departureTime: parseGTFSTime(st.departure_time),
+                arrivalTime: st.arrival_time,
+                departureTime: st.departure_time,
                 lat: stop?.stop_lat || 0,
                 lon: stop?.stop_lon || 0,
                 isTemporary: false,
@@ -124,7 +155,7 @@ export class DetourEngine {
 
         // Part 2: Replacement stops along the detour
         const divergeStopTime = originalStopTimes[startIdx];
-        let currentTime = parseGTFSTime(divergeStopTime.departure_time);
+        let currentTime = divergeStopTime.departure_time;
 
         for (const rs of detour.replacementStops) {
             currentTime += rs.travelTimeFromPrevious;
@@ -133,7 +164,7 @@ export class DetourEngine {
                 stopName: rs.stopName,
                 stopSequence: seq++,
                 arrivalTime: currentTime,
-                departureTime: currentTime + 30, // 30-second dwell at replacement stops
+                departureTime: currentTime + 30, // 30-second dwell
                 lat: rs.lat,
                 lon: rs.lon,
                 isTemporary: rs.isTemporary,
@@ -143,21 +174,20 @@ export class DetourEngine {
         }
 
         // Part 3: Original stops from rejoin point onward
-        // Calculate the time shift caused by the detour
-        const originalRejoinArrival = parseGTFSTime(originalStopTimes[endIdx].arrival_time);
+        const originalRejoinArrival = originalStopTimes[endIdx].arrival_time;
         const detourTimeShift = currentTime + (detour.replacementStops.length > 0
             ? 60  // 60s travel from last replacement stop to rejoin
             : 0) - originalRejoinArrival;
 
         for (let i = endIdx; i < originalStopTimes.length; i++) {
             const st = originalStopTimes[i];
-            const stop = this.gtfs.stops.get(st.stop_id);
+            const stop = this.repo.getStop(st.stop_id);
             modifiedStopTimes.push({
                 stopId: st.stop_id,
                 stopName: stop?.stop_name || st.stop_id,
                 stopSequence: seq++,
-                arrivalTime: parseGTFSTime(st.arrival_time) + detourTimeShift,
-                departureTime: parseGTFSTime(st.departure_time) + detourTimeShift,
+                arrivalTime: st.arrival_time + detourTimeShift,
+                departureTime: st.departure_time + detourTimeShift,
                 lat: stop?.stop_lat || 0,
                 lon: stop?.stop_lon || 0,
                 isTemporary: false,
@@ -203,76 +233,7 @@ export class DetourEngine {
         return `${y}${m}${d}`;
     }
 
-
-
-    /**
-     * Computes the full path geometry for the detour:
-     * [Start Stop -> Diverge Stop] + [Detour Shape] + [Rejoin Stop -> End Stop]
-     * This is useful for visualization on the client map.
-     */
     computeFullDetourPath(req: CreateDetourRequest): [number, number][] {
-        // Find a representative trip to get the base shape
-        // We just need ANY trip on this route/direction to get the shape geometry
-        const routeTrips = Array.from(this.gtfs.trips.values())
-            .filter(t => t.route_id === req.routeId && t.direction_id === req.directionId);
-
-        if (routeTrips.length === 0) return req.detourShape;
-
-        const trip = routeTrips[0];
-        const shapePoints = this.gtfs.shapePoints.get(trip.shape_id);
-        if (!shapePoints || shapePoints.length === 0) return req.detourShape;
-
-        const stopTimes = this.gtfs.stopTimesByTrip.get(trip.trip_id);
-        if (!stopTimes) return req.detourShape;
-
-        // Find diverges/rejoin stops in sequence
-        const startSt = stopTimes.find(st => st.stop_id === req.startStopId);
-        const endSt = stopTimes.find(st => st.stop_id === req.endStopId);
-
-        if (!startSt || !endSt) return req.detourShape;
-
-        // Get shape segments
-        // 1. Pre-diverge: From start of shape (or close to start stop?) to diverge point
-        // For simplicity, we'll slice geometry based on stops. 
-        // Ideally we project stops onto shape. Here we'll do a simple distance check.
-
-        // Find shape index closest to start/end stops
-        const startShapeIdx = this.findClosestShapeIndex(shapePoints, this.gtfs.stops.get(req.startStopId)!);
-        const endShapeIdx = this.findClosestShapeIndex(shapePoints, this.gtfs.stops.get(req.endStopId)!);
-
-        if (startShapeIdx === -1 || endShapeIdx === -1) return req.detourShape;
-
-        const path: [number, number][] = [];
-
-        // No... full path should be the REPLACEMENT segment, not the whole route.
-        // Wait, the client wants to see the "Active Detour" trace.
-        // If the detour is just the deviation, we already have `detourShape`.
-        // But usually "detour" implies the path taken *between* the affected stops.
-
-        // If the user wants to see the "Detour Path", it is effectively:
-        // Diverge Stop -> Detour Shape -> Rejoin Stop.
-        // The `detourShape` from client IS this path.
-
-        // However, the `detourShape` might be raw points.
-        // Let's just return `detourShape` for now if that's what the client sends.
-        // Actually, looking at client code, `detourPathPoints` is just the points clicked on map.
-        // It connects Diverge -> clicked points -> Rejoin.
-
         return req.detourShape;
     }
-
-    private findClosestShapeIndex(shapePoints: any[], stop: any): number {
-        if (!stop) return -1;
-        let minDist = Infinity;
-        let idx = -1;
-        for (let i = 0; i < shapePoints.length; i++) {
-            const d = haversineMeters(stop.stop_lat, stop.stop_lon, shapePoints[i].shape_pt_lat, shapePoints[i].shape_pt_lon);
-            if (d < minDist) {
-                minDist = d;
-                idx = i;
-            }
-        }
-        return idx;
-    }
 }
-

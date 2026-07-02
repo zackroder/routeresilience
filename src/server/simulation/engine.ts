@@ -1,16 +1,12 @@
-import { GTFSData, parseGTFSTime, ShapePoint } from '../gtfs/types.js';
-import { isServiceActiveOnDate, haversineMeters } from '../gtfs/loader.js';
-import { DetourEngine, ModifiedTrip, ModifiedStopTime } from '../detour/engine.js';
+import { GTFSRepository } from '../gtfs/database.js';
+import { parseGTFSTime, ShapePoint } from '../gtfs/types.js';
+import { haversineMeters } from '../gtfs/loader.js';
+import { DetourEngine } from '../detour/engine.js';
 import { VehicleState, InterpolatedShapePoint } from './types.js';
 
 /**
  * High-performance vehicle simulation engine.
  * Simulates thousands of buses moving along their routes in real-time.
- * 
- * Design:
- * - Single setInterval loop updates ALL vehicles in batch (~60ms budget)
- * - Pre-interpolated shapes for O(1) position lookups 
- * - No per-vehicle timers or async operations in the hot path
  */
 
 const INTERPOLATION_INTERVAL_METERS = 10; // interpolate a point every 10m
@@ -28,26 +24,25 @@ export class SimulationEngine {
     private activeTripIds: string[] = [];
 
     constructor(
-        private gtfs: GTFSData,
+        private repo: GTFSRepository,
         private detourEngine: DetourEngine,
     ) { }
 
     /**
-     * Pre-compute interpolated shapes for all bus route shapes.
-     * This converts variable-density shape points to fixed-interval points
-     * for O(1) position lookups during simulation.
+     * Lazy-load and interpolate a shape if not already cached.
      */
-    initializeShapes(): void {
-        console.log('Pre-interpolating shapes...');
-        const startTime = Date.now();
-        let count = 0;
-
-        for (const [shapeId, points] of this.gtfs.shapePoints) {
-            this.interpolatedShapes.set(shapeId, this.interpolateShape(points));
-            count++;
+    private getInterpolatedShape(shapeId: string): InterpolatedShapePoint[] | null {
+        if (!shapeId) return null;
+        if (this.interpolatedShapes.has(shapeId)) {
+            return this.interpolatedShapes.get(shapeId)!;
         }
 
-        console.log(`Interpolated ${count} shapes in ${Date.now() - startTime}ms`);
+        const points = this.repo.getShape(shapeId);
+        if (!points || points.length === 0) return null;
+
+        const interpolated = this.interpolateShape(points);
+        this.interpolatedShapes.set(shapeId, interpolated);
+        return interpolated;
     }
 
     private interpolateShape(points: ShapePoint[]): InterpolatedShapePoint[] {
@@ -90,26 +85,30 @@ export class SimulationEngine {
         const dateStr = this.formatDateStr(now);
         const nowSecondsSinceMidnight = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 
+        // Optimized query for active trips
+        const activeTrips = this.repo.getActiveTrips(dateStr, nowSecondsSinceMidnight);
+        console.log(`Found ${activeTrips.length} active trips for ${dateStr} @ ${nowSecondsSinceMidnight}`);
+
         let spawned = 0;
         this.activeTripIds = [];
 
-        for (const [tripId, trip] of this.gtfs.trips) {
-            // Check if this trip's service is active today
-            if (!isServiceActiveOnDate(this.gtfs, trip.service_id, dateStr)) continue;
-
-            const stopTimes = this.gtfs.stopTimesByTrip.get(tripId);
+        for (const trip of activeTrips) {
+            const stopTimes = this.repo.getStopTimes(trip.trip_id);
             if (!stopTimes || stopTimes.length < 2) continue;
 
-            const firstDeparture = parseGTFSTime(stopTimes[0].departure_time);
-            const lastArrival = parseGTFSTime(stopTimes[stopTimes.length - 1].arrival_time);
+            const firstDeparture = stopTimes[0].departure_time;
+            const lastArrival = stopTimes[stopTimes.length - 1].arrival_time;
 
-            // Collect all potentially active trips for respawning
-            const shape = this.interpolatedShapes.get(trip.shape_id);
-            if (!shape || shape.length < 2) continue;
-            this.activeTripIds.push(tripId);
-
-            // Trip is currently running if between first departure and last arrival
+            // Double check (query handles this mostly, but good for safety)
             if (nowSecondsSinceMidnight < firstDeparture || nowSecondsSinceMidnight > lastArrival) continue;
+
+            const shape = this.getInterpolatedShape(trip.shape_id);
+            if (!shape || shape.length < 2) continue;
+
+            this.activeTripIds.push(trip.trip_id);
+
+            // Check if already spawned
+            if (this.getVehicleForTrip(trip.trip_id)) continue;
 
             // Calculate approximate position along the route based on elapsed time
             const elapsed = nowSecondsSinceMidnight - firstDeparture;
@@ -129,7 +128,7 @@ export class SimulationEngine {
             // Find current stop index
             let currentStopIndex = 0;
             for (let i = 0; i < stopTimes.length; i++) {
-                if (parseGTFSTime(stopTimes[i].arrival_time) <= nowSecondsSinceMidnight) {
+                if (stopTimes[i].arrival_time <= nowSecondsSinceMidnight) {
                     currentStopIndex = i;
                 }
             }
@@ -142,7 +141,6 @@ export class SimulationEngine {
             // Calculate base speed from schedule
             const totalTripDuration = lastArrival - firstDeparture;
             const tripDistance = shape[shape.length - 1].distance;
-            // Guard against zero duration or distance
             const baseSpeed = (totalTripDuration > 0 && tripDistance > 0) ? (tripDistance / totalTripDuration) : DEFAULT_SPEED_MPS;
 
             // Simulation variability (Debug Mode only)
@@ -151,17 +149,11 @@ export class SimulationEngine {
             let isLost = false;
 
             if (process.env.SIMULATION_DEBUG_MODE === 'true') {
-                // 5% chance of being "lost"
                 isLost = Math.random() < 0.05;
-
-                // Speed variation: Normal distribution mean=1.0, stdDev=0.1
-                // Box-Muller transform
                 const u1 = Math.random();
                 const u2 = Math.random();
                 const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
                 speedFactor = 1.0 + (z * 0.1);
-
-                // Clamp speed factor to realistic bounds (0.7 - 1.3)
                 speedFactor = Math.max(0.7, Math.min(1.3, speedFactor));
                 speed = baseSpeed * speedFactor;
             } else {
@@ -170,7 +162,7 @@ export class SimulationEngine {
 
             this.vehicles.set(vehicleId, {
                 vehicleId,
-                tripId,
+                tripId: trip.trip_id,
                 routeId: trip.route_id,
                 directionId: trip.direction_id,
                 lat: pos.lat,
@@ -208,19 +200,18 @@ export class SimulationEngine {
 
         // Pick a random trip from the active pool
         const tripId = this.activeTripIds[Math.floor(Math.random() * this.activeTripIds.length)];
-        const trip = this.gtfs.trips.get(tripId);
+        const trip = this.repo.getTrip(tripId);
         if (!trip) return;
 
-        const shape = this.interpolatedShapes.get(trip.shape_id);
+        const shape = this.getInterpolatedShape(trip.shape_id);
         if (!shape || shape.length < 2) return;
 
-        const stopTimes = this.gtfs.stopTimesByTrip.get(tripId);
+        const stopTimes = this.repo.getStopTimes(tripId);
         if (!stopTimes || stopTimes.length < 2) return;
 
-        const firstDeparture = parseGTFSTime(stopTimes[0].departure_time);
+        const firstDeparture = stopTimes[0].departure_time;
 
         // Start the vehicle at a random point along the first 20% of the route
-        // so they don't all start at the beginning
         const startProgress = Math.random() * 0.2;
         const distanceTraveled = startProgress * shape[shape.length - 1].distance;
 
@@ -260,10 +251,9 @@ export class SimulationEngine {
         if (process.env.SIMULATION_DEBUG_MODE === 'true') {
             const v = this.vehicles.get(vehicleId);
             if (v) {
-                const totalDuration = parseGTFSTime(stopTimes[stopTimes.length - 1].arrival_time) - firstDeparture;
+                const totalDuration = stopTimes[stopTimes.length - 1].arrival_time - firstDeparture;
                 const baseSpeed = (totalDuration > 0 && v.totalDistance > 0) ? (v.totalDistance / totalDuration) : DEFAULT_SPEED_MPS;
 
-                // Random factor
                 const u1 = Math.random();
                 const u2 = Math.random();
                 const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
@@ -318,7 +308,7 @@ export class SimulationEngine {
                     vehicle.status = 'IN_TRANSIT';
                     vehicle.currentStopIndex++;
 
-                    const stopTimes = this.gtfs.stopTimesByTrip.get(vehicle.tripId);
+                    const stopTimes = this.repo.getStopTimes(vehicle.tripId);
                     if (stopTimes && vehicle.currentStopIndex < stopTimes.length) {
                         vehicle.nextStopId = stopTimes[vehicle.currentStopIndex].stop_id;
                     }
@@ -327,10 +317,11 @@ export class SimulationEngine {
             }
 
             // Move vehicle along shape
-            const trip = this.gtfs.trips.get(vehicle.tripId);
+            const trip = this.repo.getTrip(vehicle.tripId);
             if (!trip) continue;
 
-            const shape = this.interpolatedShapes.get(trip.shape_id);
+            // Optimization: Get shape from cache
+            const shape = this.getInterpolatedShape(trip.shape_id);
             if (!shape) continue;
 
             const dt = (now - vehicle.lastUpdateTime) / 1000; // seconds
@@ -355,7 +346,6 @@ export class SimulationEngine {
 
             if (vehicle.isLost && vehicle.lostHeading !== undefined) {
                 // Lost behavior: drift away from route
-                // Update position based on heading
                 const distLat = (vehicle.speed * dt) / 111111; // rough meters to degrees
                 const distLon = (vehicle.speed * dt) / (111111 * Math.cos(vehicle.lat * Math.PI / 180));
 
@@ -377,12 +367,10 @@ export class SimulationEngine {
                 vehicle.bearing = this.calculateBearing(curr.lat, curr.lon, next.lat, next.lon);
             }
 
-
-
             // Check if near next stop — trigger dwell
-            const stopTimes = this.gtfs.stopTimesByTrip.get(vehicle.tripId);
+            const stopTimes = this.repo.getStopTimes(vehicle.tripId);
             if (stopTimes && vehicle.currentStopIndex < stopTimes.length) {
-                const nextStop = this.gtfs.stops.get(vehicle.nextStopId);
+                const nextStop = this.repo.getStop(vehicle.nextStopId);
                 if (nextStop) {
                     const distToStop = haversineMeters(vehicle.lat, vehicle.lon, nextStop.stop_lat, nextStop.stop_lon);
                     if (distToStop < 30) { // within 30m of stop
@@ -459,9 +447,6 @@ export class SimulationEngine {
             stopId,
             timestamp
         });
-
-        // In a real implementation this might write to a CSV file or database
-        // For now, we just log to console occasionally or expose via API
     }
 
     getArrivals() {
