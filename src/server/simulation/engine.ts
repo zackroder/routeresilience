@@ -139,6 +139,9 @@ export class SimulationEngine {
             const nextPos = shape[Math.min(shapeIndex + 1, shape.length - 1)];
             const bearing = this.calculateBearing(pos.lat, pos.lon, nextPos.lat, nextPos.lon);
 
+            // 5% chance of being "lost"
+            const isLost = Math.random() < 0.05;
+
             this.vehicles.set(vehicleId, {
                 vehicleId,
                 tripId,
@@ -157,6 +160,8 @@ export class SimulationEngine {
                 tripStartTime: firstDeparture,
                 lastUpdateTime: now.getTime(),
                 dwellEndTime: 0,
+                isLost,
+                lostHeading: isLost ? Math.random() * 360 : undefined
             });
 
             spawned++;
@@ -299,16 +304,31 @@ export class SimulationEngine {
             const curr = shape[vehicle.shapeIndex];
             const next = shape[Math.min(vehicle.shapeIndex + 1, shape.length - 1)];
 
-            if (next.distance > curr.distance) {
-                const t = (vehicle.distanceTraveled - curr.distance) / (next.distance - curr.distance);
-                vehicle.lat = curr.lat + t * (next.lat - curr.lat);
-                vehicle.lon = curr.lon + t * (next.lon - curr.lon);
+            if (vehicle.isLost && vehicle.lostHeading !== undefined) {
+                // Lost behavior: drift away from route
+                // Update position based on heading
+                const distLat = (vehicle.speed * dt) / 111111; // rough meters to degrees
+                const distLon = (vehicle.speed * dt) / (111111 * Math.cos(vehicle.lat * Math.PI / 180));
+
+                const rads = (vehicle.lostHeading * Math.PI) / 180;
+                vehicle.lat += distLat * Math.cos(rads);
+                vehicle.lon += distLon * Math.sin(rads);
+
+                // Slowly change heading
+                vehicle.lostHeading += (Math.random() - 0.5) * 10;
+                vehicle.bearing = vehicle.lostHeading;
             } else {
-                vehicle.lat = curr.lat;
-                vehicle.lon = curr.lon;
+                const segmentDist = next.distance - curr.distance;
+                const progress = segmentDist > 0 ? (vehicle.distanceTraveled - curr.distance) / segmentDist : 0;
+
+                vehicle.lat = curr.lat + (next.lat - curr.lat) * progress;
+                vehicle.lon = curr.lon + (next.lon - curr.lon) * progress;
+
+                // Update bearing
+                vehicle.bearing = this.calculateBearing(curr.lat, curr.lon, next.lat, next.lon);
             }
 
-            vehicle.bearing = this.calculateBearing(curr.lat, curr.lon, next.lat, next.lon);
+
 
             // Check if near next stop — trigger dwell
             const stopTimes = this.gtfs.stopTimesByTrip.get(vehicle.tripId);

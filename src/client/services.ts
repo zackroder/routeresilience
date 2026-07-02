@@ -49,6 +49,7 @@ export interface DetourData {
         travelTimeFromPrevious: number;
     }[];
     detourShape: [number, number][];
+    path?: [number, number][];
     startTime: string;
     endTime: string;
     description: string;

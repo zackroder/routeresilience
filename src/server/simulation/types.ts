@@ -26,6 +26,8 @@ export interface VehicleState {
     tripStartTime: number;     // seconds since midnight when trip started
     lastUpdateTime: number;    // epoch ms
     dwellEndTime: number;      // epoch ms (when stopped at a stop, when to depart)
+    isLost?: boolean;
+    lostHeading?: number;
 }
 
 export interface InterpolatedShapePoint {
