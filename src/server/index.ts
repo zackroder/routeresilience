@@ -27,11 +27,16 @@ async function main() {
     const predictions = new PredictionEngine(gtfs, simulation);
     const feedGenerator = new FeedGenerator(gtfs, detourEngine, detourStore, simulation, predictions);
 
-    // ─── 3. Initialize simulation ───
-    console.log('\n[3/4] Initializing vehicle simulation...');
-    simulation.initializeShapes();
-    simulation.spawnActiveVehicles();
-    simulation.start();
+    // ─── 3. Initialize simulation (DEBUG ONLY) ───
+    const isSimulationEnabled = process.env.SIMULATION_DEBUG_MODE === 'true';
+    if (isSimulationEnabled) {
+        console.log('\n[3/4] Initializing vehicle simulation (DEBUG MODE ENABLED)...');
+        simulation.initializeShapes();
+        simulation.spawnActiveVehicles();
+        simulation.start();
+    } else {
+        console.log('\n[3/4] Vehicle simulation skipped (SIMULATION_DEBUG_MODE not set)');
+    }
 
     // ─── 4. Start HTTP server ───
     console.log('\n[4/4] Starting HTTP server...');
@@ -52,14 +57,17 @@ async function main() {
         console.log(`  Server running at http://localhost:${PORT}`);
         console.log(`  GTFS-RT feed: http://localhost:${PORT}/api/gtfs-rt`);
         console.log(`  GTFS-RT JSON: http://localhost:${PORT}/api/gtfs-rt/json`);
-        console.log(`  Vehicles: ${simulation.getVehicleCount()} active`);
+        if (isSimulationEnabled) {
+            console.log(`  Vehicles: ${simulation.getVehicleCount()} active`);
+        }
         console.log(`  Routes: ${gtfs.routes.size} bus routes loaded`);
         console.log('═══════════════════════════════════════════════');
     });
 
     // Periodic stats
     setInterval(() => {
-        console.log(`[stats] Vehicles: ${simulation.getVehicleCount()}, Active Detours: ${detourStore.getActive().length}`);
+        const simStats = isSimulationEnabled ? `Vehicles: ${simulation.getVehicleCount()}, ` : '';
+        console.log(`[stats] ${simStats}Active Detours: ${detourStore.getActive().length}`);
     }, 60_000);
 }
 

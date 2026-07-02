@@ -139,8 +139,34 @@ export class SimulationEngine {
             const nextPos = shape[Math.min(shapeIndex + 1, shape.length - 1)];
             const bearing = this.calculateBearing(pos.lat, pos.lon, nextPos.lat, nextPos.lon);
 
-            // 5% chance of being "lost"
-            const isLost = Math.random() < 0.05;
+            // Calculate base speed from schedule
+            const totalTripDuration = lastArrival - firstDeparture;
+            const tripDistance = shape[shape.length - 1].distance;
+            // Guard against zero duration or distance
+            const baseSpeed = (totalTripDuration > 0 && tripDistance > 0) ? (tripDistance / totalTripDuration) : DEFAULT_SPEED_MPS;
+
+            // Simulation variability (Debug Mode only)
+            let speed = DEFAULT_SPEED_MPS;
+            let speedFactor = 1.0;
+            let isLost = false;
+
+            if (process.env.SIMULATION_DEBUG_MODE === 'true') {
+                // 5% chance of being "lost"
+                isLost = Math.random() < 0.05;
+
+                // Speed variation: Normal distribution mean=1.0, stdDev=0.1
+                // Box-Muller transform
+                const u1 = Math.random();
+                const u2 = Math.random();
+                const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+                speedFactor = 1.0 + (z * 0.1);
+
+                // Clamp speed factor to realistic bounds (0.7 - 1.3)
+                speedFactor = Math.max(0.7, Math.min(1.3, speedFactor));
+                speed = baseSpeed * speedFactor;
+            } else {
+                speed = DEFAULT_SPEED_MPS;
+            }
 
             this.vehicles.set(vehicleId, {
                 vehicleId,
@@ -150,7 +176,7 @@ export class SimulationEngine {
                 lat: pos.lat,
                 lon: pos.lon,
                 bearing,
-                speed: DEFAULT_SPEED_MPS,
+                speed,
                 shapeIndex,
                 distanceTraveled,
                 totalDistance: shape[shape.length - 1].distance,
@@ -161,7 +187,9 @@ export class SimulationEngine {
                 lastUpdateTime: now.getTime(),
                 dwellEndTime: 0,
                 isLost,
-                lostHeading: isLost ? Math.random() * 360 : undefined
+                lostHeading: isLost ? Math.random() * 360 : undefined,
+                baseSpeed,
+                speedFactor: process.env.SIMULATION_DEBUG_MODE === 'true' ? speedFactor : undefined
             });
 
             spawned++;
@@ -215,7 +243,8 @@ export class SimulationEngine {
             lat: pos.lat,
             lon: pos.lon,
             bearing: this.calculateBearing(pos.lat, pos.lon, nextPos.lat, nextPos.lon),
-            speed: DEFAULT_SPEED_MPS * (0.8 + Math.random() * 0.4), // vary speed ±20%
+
+            speed: DEFAULT_SPEED_MPS, // will be overridden below if debug
             shapeIndex,
             distanceTraveled,
             totalDistance: shape[shape.length - 1].distance,
@@ -226,6 +255,26 @@ export class SimulationEngine {
             lastUpdateTime: now,
             dwellEndTime: 0,
         });
+
+        // Apply debug variability if enabled
+        if (process.env.SIMULATION_DEBUG_MODE === 'true') {
+            const v = this.vehicles.get(vehicleId);
+            if (v) {
+                const totalDuration = parseGTFSTime(stopTimes[stopTimes.length - 1].arrival_time) - firstDeparture;
+                const baseSpeed = (totalDuration > 0 && v.totalDistance > 0) ? (v.totalDistance / totalDuration) : DEFAULT_SPEED_MPS;
+
+                // Random factor
+                const u1 = Math.random();
+                const u2 = Math.random();
+                const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+                let speedFactor = 1.0 + (z * 0.1);
+                speedFactor = Math.max(0.7, Math.min(1.3, speedFactor));
+
+                v.baseSpeed = baseSpeed;
+                v.speedFactor = speedFactor;
+                v.speed = baseSpeed * speedFactor;
+            }
+        }
     }
 
     /**
@@ -337,10 +386,14 @@ export class SimulationEngine {
                 if (nextStop) {
                     const distToStop = haversineMeters(vehicle.lat, vehicle.lon, nextStop.stop_lat, nextStop.stop_lon);
                     if (distToStop < 30) { // within 30m of stop
-                        vehicle.status = 'AT_STOP';
                         vehicle.dwellEndTime = now + STOP_DWELL_MS;
                         vehicle.lat = nextStop.stop_lat;
                         vehicle.lon = nextStop.stop_lon;
+
+                        // Record arrival if in debug mode
+                        if (process.env.SIMULATION_DEBUG_MODE === 'true') {
+                            this.recordArrival(vehicle, nextStop.stop_id, now);
+                        }
                     }
                 }
             }
@@ -393,5 +446,25 @@ export class SimulationEngine {
 
     private formatDateStr(date: Date): string {
         return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+    }
+
+    private arrivalLog: { vehicleId: string, tripId: string, stopId: string, timestamp: number }[] = [];
+
+    private recordArrival(vehicle: VehicleState, stopId: string, timestamp: number) {
+        // Keep last 1000 arrivals
+        if (this.arrivalLog.length > 1000) this.arrivalLog.shift();
+        this.arrivalLog.push({
+            vehicleId: vehicle.vehicleId,
+            tripId: vehicle.tripId,
+            stopId,
+            timestamp
+        });
+
+        // In a real implementation this might write to a CSV file or database
+        // For now, we just log to console occasionally or expose via API
+    }
+
+    getArrivals() {
+        return this.arrivalLog;
     }
 }

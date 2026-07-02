@@ -334,6 +334,11 @@ export function createApiRouter(
         });
     });
 
+    /** Get arrival logs (debug) */
+    router.get('/arrivals', (_req: Request, res: Response) => {
+        res.json(simulation.getArrivals());
+    });
+
     /** System status */
     router.get('/status', (_req: Request, res: Response) => {
         res.json({

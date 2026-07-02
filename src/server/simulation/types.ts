@@ -28,6 +28,11 @@ export interface VehicleState {
     dwellEndTime: number;      // epoch ms (when stopped at a stop, when to depart)
     isLost?: boolean;
     lostHeading?: number;
+
+    // Debug / Simulation Only
+    baseSpeed?: number;
+    speedFactor?: number;
+    scheduleDeviation?: number;
 }
 
 export interface InterpolatedShapePoint {

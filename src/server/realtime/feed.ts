@@ -25,7 +25,7 @@ import { encodeFeedMessage } from './proto.js';
 let cachedFeed: Buffer | null = null;
 let cachedFeedJson: any = null;
 let cacheTimestamp = 0;
-const CACHE_TTL_MS = 10_000; // 10 seconds
+const CACHE_TTL_MS = 1_000; // 1 second
 
 export class FeedGenerator {
     constructor(
