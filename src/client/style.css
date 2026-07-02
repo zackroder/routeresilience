@@ -305,14 +305,19 @@ body {
 .status-pill {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  /* wrap onto second line on narrow windows */
+  gap: 8px 12px;
   background: var(--bg-secondary);
-  padding: 6px 16px;
+  padding: 5px 14px;
   border-radius: 20px;
   border: 1px solid var(--border);
-  font-size: 13px;
+  font-size: clamp(11px, 1.1vw, 13px);
   font-weight: 500;
   color: var(--text-secondary);
+  max-width: 100%;
+  /* never wider than the header allows */
+  overflow: hidden;
 }
 
 .status-dot {
@@ -434,6 +439,12 @@ body {
 .cancelled-trip-card:hover {
   border-color: var(--accent-red);
   box-shadow: var(--shadow-sm);
+}
+
+.cancelled-trip-card.card-selected {
+  border-color: var(--accent-blue);
+  background: var(--bg-surface-active);
+  box-shadow: 0 0 0 1px var(--accent-blue);
 }
 
 /* Detoured Trip Highlight */
@@ -1766,8 +1777,8 @@ body.light-theme .modal-overlay {
 .block-label {
   width: 80px;
   flex-shrink: 0;
-  background: var(--bg-primary);
-  /* Ensure opacity */
+  background: var(--bg-secondary);
+  /* opaque — masks trip bars that scroll underneath */
   border-right: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -1779,8 +1790,44 @@ body.light-theme .modal-overlay {
   position: sticky;
   left: 0;
   z-index: 1000;
-  /* Above content, below header */
-  box-shadow: 1px 0 2px rgba(0, 0, 0, 0.05);
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.25);
+  /* hard right edge so trips "disappear" under it */
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms, color 120ms;
+}
+
+.block-label:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+/* Some trips in this block are selected — opaque blue tint */
+.block-label.partial-selected {
+  background: #1e2d4a;
+  color: var(--accent-blue);
+  box-shadow: inset 2px 0 0 var(--accent-blue), 2px 0 4px rgba(0, 0, 0, 0.3);
+}
+
+body.light-theme .block-label.partial-selected {
+  background: #dbeafe;
+  color: #1d4ed8;
+  box-shadow: inset 2px 0 0 #1d4ed8, 2px 0 4px rgba(0, 0, 0, 0.08);
+}
+
+/* All cancellable trips in this block are selected */
+.block-label.all-selected {
+  background: #1e3a5f;
+  color: var(--accent-blue);
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 var(--accent-blue), 2px 0 6px rgba(0, 0, 0, 0.4);
+}
+
+body.light-theme .block-label.all-selected {
+  background: #bfdbfe;
+  color: #1d4ed8;
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 #1d4ed8, 2px 0 6px rgba(0, 0, 0, 0.1);
 }
 
 .block-track {
@@ -1826,6 +1873,55 @@ body.light-theme .modal-overlay {
   transform: translateY(-1px);
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.4);
   z-index: 10;
+}
+
+/* Selected trip bar: white ring */
+.trip-bar.trip-selected {
+  outline: 2px solid white;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.7), 0 2px 4px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+  transform: translateY(-1px);
+}
+
+/* ── Block Action Bar ── */
+/* Rendered outside .block-view-content so it doesn't scroll horizontally */
+.block-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 8px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--accent-blue);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+  gap: 12px;
+  animation: slideDown 0.15s ease;
+  flex-shrink: 0;
+  /* doesn't compress in flex column layout */
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.block-action-info {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.block-action-sub {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .trip-bar.cancelled {
@@ -1879,4 +1975,304 @@ body.light-theme .modal-overlay {
   overflow: hidden;
   height: 100%;
   /* Ensure it fills parent */
+}
+
+/* ─── System Modal ─── */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.modal-card {
+  background: var(--bg-surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-strong);
+  width: 90%;
+  max-width: 420px;
+  border: 1px solid var(--border-strong);
+  animation: modalScaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-card.warning {
+  border-color: rgba(245, 158, 11, 0.3);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(245, 158, 11, 0.3);
+}
+
+.modal-card.danger {
+  border-color: rgba(239, 68, 68, 0.3);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(239, 68, 68, 0.3);
+}
+
+.modal-header {
+  padding: 20px 24px;
+  background: var(--bg-surface-hover);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 24px;
+  font-size: 15px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.modal-actions {
+  padding: 16px 24px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.btn-modal-cancel {
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.btn-modal-cancel:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--text-muted);
+}
+
+.btn-modal-confirm {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-modal-confirm:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Variant styles for specific contexts */
+.modal-card.warning .btn-modal-confirm {
+  background: var(--accent-orange);
+  color: white;
+}
+
+.modal-card.danger .btn-modal-confirm {
+  background: var(--accent-red);
+  color: white;
+}
+
+.modal-card.warning .modal-header h3 {
+  color: var(--accent-orange);
+}
+
+.modal-card.danger .modal-header h3 {
+  color: var(--accent-red);
+}
+
+@keyframes modalScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ─── Sidebar Panel Layout ─── */
+/* Force sidebar to flex col */
+#sidebar {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+}
+
+/* Route Panel: Specific constraint */
+#route-panel {
+  flex-shrink: 0;
+  max-height: 50%;
+  /* Prevent taking over */
+  border-bottom: 1px solid var(--border);
+}
+
+/* Active Detours Panel: Fills remaining space */
+#active-detours-panel {
+  flex-grow: 1;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  flex-shrink: 0;
+}
+
+.panel-body {
+  flex-grow: 1;
+  /* Fill the panel */
+  overflow-y: auto;
+  /* Scrollable content area */
+  min-height: 0;
+  /* Important for nested flex scroll */
+}
+
+/* Specific scrolling for route list inside route panel */
+.route-list {
+  max-height: 300px;
+  /* Limit route list specifically */
+  overflow-y: auto;
+}
+
+/* Standalone Widget Styling */
+.standalone-widget {
+  margin: 12px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.standalone-widget:hover {
+  border-color: var(--accent-red);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+/* ─── Sidebar Views ─── */
+.sidebar-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ─── Dashboard Widgets ─── */
+.dashboard-widgets {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-secondary);
+  flex-grow: 1;
+  /* Fill remaining space below route panel */
+  border-top: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.dashboard-widget {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.dashboard-widget:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+  background: var(--bg-surface-hover);
+}
+
+.widget-count {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  min-width: 40px;
+  text-align: center;
+}
+
+.widget-count.red {
+  color: var(--accent-red);
+}
+
+.widget-count.yellow {
+  color: var(--accent-orange);
+}
+
+.widget-count.blue {
+  color: var(--accent-blue);
+}
+
+.widget-label {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.widget-label strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.widget-label span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ─── Detour List View ─── */
+.detour-section-header {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  padding-left: 4px;
 }

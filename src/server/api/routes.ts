@@ -95,14 +95,21 @@ export function createApiRouter(
             const trip = repo.getTrip(id);
             if (!trip) return { trip_id: id, status: 'UNKNOWN' };
             const route = repo.getRoute(trip.route_id);
+            // Fetch first/last stop names from stop_times
+            const stopTimes = repo.getStopTimes(id) || [];
+            const firstStop = stopTimes.length > 0 ? repo.getStop(stopTimes[0].stop_id) : null;
+            const lastStop = stopTimes.length > 0 ? repo.getStop(stopTimes[stopTimes.length - 1].stop_id) : null;
             return {
                 trip_id: id,
                 route_id: trip.route_id,
                 route_short_name: route?.route_short_name,
+                route_color: route?.route_color,
+                route_text_color: route?.route_text_color,
                 direction_id: trip.direction_id,
-                trip_headsign: trip.trip_headsign,
                 start_time: trip.start_time,
-                end_time: trip.end_time
+                end_time: trip.end_time,
+                first_stop_name: firstStop?.stop_name || null,
+                last_stop_name: lastStop?.stop_name || null,
             };
         });
         res.json(details);
@@ -144,10 +151,11 @@ export function createApiRouter(
     router.get('/routes/:id/trips', (req: Request, res: Response) => {
         const routeId = req.params.id;
         const directionId = parseInt(req.query.direction as string) || 0;
+        const limit = Math.min(parseInt(req.query.limit as string) || 50, 200); // #12: configurable, capped at 200
 
         const trips = repo.getTripsForRoute(routeId, directionId);
 
-        const result = trips.slice(0, 50).map(trip => { // Limit to 50 for UI
+        const result = trips.slice(0, limit).map(trip => {
             const stopTimes = repo.getStopTimes(trip.trip_id) || [];
             return {
                 trip_id: trip.trip_id,
@@ -162,18 +170,22 @@ export function createApiRouter(
         res.json(result);
     });
 
-    /** Get all unique shape patterns for a route + direction (longest first) */
+    /** Get all unique shape patterns for a route + direction, sorted by today-trip-count descending */
     router.get('/routes/:id/shape', (req: Request, res: Response) => {
         const routeId = req.params.id;
         const directionId = parseInt(req.query.direction as string) || 0;
         const trips = repo.getTripsForRoute(routeId, directionId);
+
+        // Today's date in YYYYMMDD format (for service-active check)
+        const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
         // Collect all unique shapes for this route+direction
         const shapesMap = new Map<string, {
             shape_id: string;
             points: { lat: number; lon: number }[];
             totalDistance: number;
-            tripCount: number;
+            tripCount: number;      // all-time (for display fallback)
+            todayTripCount: number; // trips running today
             representativeTripId: string;
         }>();
 
@@ -183,8 +195,12 @@ export function createApiRouter(
         for (const trip of trips) {
             if (!trip.shape_id) continue;
 
+            const runsToday = repo.isServiceActiveToday(trip.service_id, todayStr);
+
             if (shapesMap.has(trip.shape_id)) {
-                shapesMap.get(trip.shape_id)!.tripCount++;
+                const entry = shapesMap.get(trip.shape_id)!;
+                entry.tripCount++;
+                if (runsToday) entry.todayTripCount++;
                 continue;
             }
 
@@ -198,25 +214,26 @@ export function createApiRouter(
                 shapeCache.set(trip.shape_id, points);
             }
 
-            // Calculate total distance for sorting
+            // Calculate total distance for fallback sorting
             let totalDistance = 0;
             for (let i = 1; i < points.length; i++) {
                 const a = points[i - 1], b = points[i];
-                // Quick approx distance
                 const dx = (b.lat - a.lat) * 111320;
                 const dy = (b.lon - a.lon) * 111320 * Math.cos(a.lat * Math.PI / 180);
                 totalDistance += Math.sqrt(dx * dx + dy * dy);
             }
 
             shapesMap.set(trip.shape_id, {
-                shape_id: trip.shape_id, points, totalDistance, tripCount: 1,
+                shape_id: trip.shape_id, points, totalDistance,
+                tripCount: 1,
+                todayTripCount: runsToday ? 1 : 0,
                 representativeTripId: trip.trip_id,
             });
         }
 
-        // Sort by total distance descending (longest pattern first)
+        // Sort by today-trip-count descending, then by total distance as tiebreaker
         const patterns = Array.from(shapesMap.values())
-            .sort((a, b) => b.totalDistance - a.totalDistance);
+            .sort((a, b) => b.todayTripCount - a.todayTripCount || b.totalDistance - a.totalDistance);
 
         if (patterns.length > 0) {
             // Build enriched pattern info with first/last stop names and stop IDs
@@ -229,7 +246,7 @@ export function createApiRouter(
                     shape_id: p.shape_id,
                     pointCount: p.points.length,
                     totalDistance: Math.round(p.totalDistance),
-                    tripCount: p.tripCount,
+                    tripCount: p.todayTripCount,  // now = today's count
                     isDefault: i === 0,
                     firstStopName: firstStop?.stop_name || 'Unknown',
                     lastStopName: lastStop?.stop_name || 'Unknown',
@@ -462,11 +479,9 @@ export function createApiRouter(
     /** System status */
     router.get('/status', (_req: Request, res: Response) => {
         res.json({
-            // These counts are now expensive-ish or we don't expose them
-            // We could add count methods to repository
-            routes: 0,
-            trips: 0,
-            stops: 0,
+            routes: repo.getRouteCount(),
+            trips: repo.getTripCount(),
+            stops: repo.getStopCount(),
             activeVehicles: simulation.getVehicleCount(),
             activeDetours: detourStore.getActive().length,
             totalDetours: detourStore.getAll().length,

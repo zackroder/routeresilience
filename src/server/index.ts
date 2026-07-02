@@ -1,5 +1,4 @@
 import express from 'express';
-// Force reload timestamp: 2026-02-18 (Tooltip Scroll & Polish Fixes)
 import cors from 'cors';
 import { createServer } from 'http';
 import { loadGTFS } from './gtfs/loader.js';
@@ -14,7 +13,7 @@ import { PredictionEngine } from './realtime/predictions.js';
 const PORT = 4000;
 
 async function main() {
-    console.log('// ─── Transit Detour Manager Server ───\n// Force reload timestamp: 2026-02-18 (Fix routes)\n');
+    console.log('// ─── Transit Detour Manager Server ───\n');
 
     // ─── 1. Load GTFS Data (to SQLite) ───
     console.log('\n[1/4] Loading GTFS static data...');

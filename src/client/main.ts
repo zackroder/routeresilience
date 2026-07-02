@@ -52,7 +52,115 @@ let activeView: 'map' | 'blocks' | 'cancelled' = 'map';
 let blockViewDate = new Date().toISOString().slice(0, 10);
 let cachedBlocks: BlockData[] = [];
 let loadedBlockDate: string | null = null;
+
+// Multi-select state for block viewer
+let selectedTripIds = new Set<string>();
+let lastClickedTripId: string | null = null;
+let visibleTripOrder: string[] = []; // flat ordered list of trip IDs from last render (for shift-range)
 // let pixelsPerHour = 100; // Zoom removed
+
+
+// ─── Modal Helpers ───
+
+interface ModalOptions {
+    title: string;
+    message: string;
+    type?: 'info' | 'danger' | 'warning';
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm?: () => void;
+    onCancel?: () => void;
+}
+
+function showModal(opts: ModalOptions) {
+    const overlay = document.getElementById('system-modal');
+    // Ensure overlay exists (in case index.html update failed or hasn't loaded)
+    if (!overlay) {
+        alert(opts.message); // Fallback
+        if (opts.onConfirm) opts.onConfirm();
+        return;
+    }
+
+    const card = overlay.querySelector('.modal-card');
+    const title = document.getElementById('sys-modal-title');
+    const body = document.getElementById('sys-modal-message');
+    const actions = document.getElementById('sys-modal-actions');
+
+    if (!card || !title || !body || !actions) return;
+
+    // Reset classes
+    card.className = 'modal-card';
+    if (opts.type) card.classList.add(opts.type);
+
+    // Content
+    title.textContent = opts.title;
+    body.innerHTML = opts.message.replace(/\n/g, '<br>');
+
+    // Buttons
+    actions.innerHTML = '';
+
+    if (opts.onCancel || opts.cancelText) {
+        const btnCancel = document.createElement('button');
+        btnCancel.className = 'btn-modal-cancel';
+        btnCancel.textContent = opts.cancelText || 'Cancel';
+        btnCancel.onclick = () => {
+            closeModal();
+            if (opts.onCancel) opts.onCancel();
+        };
+        actions.appendChild(btnCancel);
+    }
+
+    const btnConfirm = document.createElement('button');
+    btnConfirm.className = 'btn-modal-confirm';
+    btnConfirm.textContent = opts.confirmText || 'OK';
+    btnConfirm.onclick = () => {
+        closeModal();
+        if (opts.onConfirm) opts.onConfirm();
+    };
+    actions.appendChild(btnConfirm);
+
+    overlay.style.display = 'flex';
+}
+
+function closeModal() {
+    const overlay = document.getElementById('system-modal');
+    if (overlay) overlay.style.display = 'none';
+}
+
+function showConfirm(message: string, onConfirm: () => void, title = 'Are you sure?', confirmText = 'Confirm', cancelText = 'Cancel') {
+    showModal({
+        title,
+        message,
+        type: 'warning',
+        confirmText,
+        cancelText,
+        onConfirm,
+        onCancel: () => { }
+    });
+}
+
+function showAlert(message: string, title = 'Alert') {
+    showModal({
+        title,
+        message,
+        type: 'info',
+        confirmText: 'OK'
+    });
+}
+
+function showError(message: string) {
+    showModal({
+        title: 'Error',
+        message,
+        type: 'danger',
+        confirmText: 'Close'
+    });
+}
+
+// Global exposure
+(window as any).showAlert = showAlert;
+(window as any).showError = showError;
+(window as any).showConfirm = showConfirm;
 
 
 // ─── Initialize ───
@@ -221,10 +329,22 @@ async function toggleRouteDetails(routeId: string) {
             if (!patterns || patterns.length === 0) return '';
             let s = `<div style="font-size:11px;font-weight:700;margin-top:8px;margin-bottom:4px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px">${dirLabel}</div>`;
             patterns.forEach(p => {
-                s += `<div style="font-size:12px;margin-top:3px;display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid var(--border-subtle)">
-                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px" title="${p.firstStopName} to ${p.lastStopName}">${p.firstStopName} → ${p.lastStopName}</span>
-                    <span style="color:var(--text-muted);font-size:11px;margin-left:6px;white-space:nowrap">${p.tripCount} trips</span>
+                s += `<div style="font-size:12px;margin-top:3px;display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-subtle)">
+                    <div style="display:flex;align-items:stretch;gap:6px;flex:1;min-width:0">
+                        <div style="display:flex;flex-direction:column;align-items:center;padding:2px 0;flex-shrink:0">
+                            <div style="width:7px;height:7px;border-radius:50%;background:var(--text-secondary);flex-shrink:0"></div>
+                            <div style="width:1px;flex:1;min-height:5px;background:var(--border)"></div>
+                            <div style="width:7px;height:7px;border-radius:50%;border:1.5px solid var(--text-muted);flex-shrink:0"></div>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+                            <span style="color:var(--text-secondary);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${p.firstStopName}">${p.firstStopName}</span>
+                            <span style="color:var(--text-muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${p.lastStopName}">${p.lastStopName}</span>
+                        </div>
+                    </div>
+                    <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;flex-shrink:0">${p.tripCount} scheduled today</span>
                 </div>`;
+
+
             });
             return s;
         };
@@ -368,11 +488,10 @@ function renderStopsOnMap(stops: StopInfo[], clear: boolean = true) {
 function startDetourCreation(initialDirection?: number, preserveView: boolean = false) {
     if (!selectedRoute) return;
 
-    // Switch panels
-    document.getElementById('route-panel')!.style.display = 'none';
-    const activePanel = document.getElementById('active-detours-panel');
-    if (activePanel) activePanel.style.display = 'none';
-    document.getElementById('detour-panel')!.style.display = 'block';
+    // Switch to creation view
+    document.getElementById('sidebar-home')!.style.display = 'none';
+    document.getElementById('sidebar-detours')!.style.display = 'none';
+    document.getElementById('detour-panel')!.style.display = 'flex';
 
     // Initialize state
     detourStep = 'select-diverge'; // Start at step 1, but with direction toggle active above
@@ -401,10 +520,7 @@ function startDetourCreation(initialDirection?: number, preserveView: boolean = 
 
 function closeDetourPanel() {
     document.getElementById('detour-panel')!.style.display = 'none';
-    document.getElementById('route-panel')!.style.display = 'block';
-    const activePanel = document.getElementById('active-detours-panel');
-    if (activePanel) activePanel.style.display = 'block';
-    updateDetourStepUI();
+    showHomeView();
 }
 
 function cancelDetourCreation() {
@@ -962,23 +1078,28 @@ async function findCandidateStops() {
 /**
  * Navigate back to a previous step in the detour creation wizard.
  */
+function resetDetourCreation() {
+    divergeStopId = null;
+    divergeStop = null;
+    rejoinStopId = null;
+    rejoinStop = null;
+    detourPathPoints = [];
+    replacementStops = [];
+    detourShapeLayer.clearLayers();
+    replacementStopsLayer.clearLayers();
+    candidateStopsLayer.clearLayers();
+    detourStep = 'idle';
+    startDetourCreation();
+}
+
+/**
+ * Navigate back to a previous step in the detour creation wizard.
+ */
 function goBackStep(targetStep: DetourStep) {
     if (targetStep === 'select-diverge') {
-        const confirmReset = confirm('Going back to start will clear the entire detour. Are you sure?');
-        if (!confirmReset) return;
-
-        // Reset everything
-        divergeStopId = null;
-        divergeStop = null;
-        rejoinStopId = null;
-        rejoinStop = null;
-        detourPathPoints = [];
-        replacementStops = [];
-        detourShapeLayer.clearLayers();
-        replacementStopsLayer.clearLayers();
-        candidateStopsLayer.clearLayers();
-        detourStep = 'idle';
-        startDetourCreation();
+        showConfirm('Going back to start will clear the entire detour. Are you sure?', () => {
+            resetDetourCreation();
+        }, 'Restart Detour');
         return;
     } else if (targetStep === 'trace-path') {
         // Keep the path but clear the rejoin
@@ -1029,14 +1150,14 @@ async function activateDetour() {
     const endTime = (document.getElementById('detour-end') as HTMLInputElement).value;
 
     if (!startTime || !endTime) {
-        alert('Please set start and end times.');
+        showError('Please set start and end times.');
         activateBtn.disabled = false;
         activateBtn.textContent = 'Activate Detour';
         return;
     }
 
     if (new Date(startTime) >= new Date(endTime)) {
-        alert('End time must be after start time.');
+        showError('End time must be after start time.');
         activateBtn.disabled = false;
         activateBtn.textContent = 'Activate Detour';
         return;
@@ -1155,7 +1276,7 @@ async function activateDetour() {
 
 
     } catch (err: any) {
-        alert('Failed to activate detour: ' + err.message);
+        showError('Failed to activate detour: ' + err.message);
         const activateBtn = document.getElementById('activate-detour') as HTMLButtonElement;
         if (activateBtn) {
             activateBtn.disabled = false;
@@ -1168,87 +1289,105 @@ async function activateDetour() {
 
 async function loadActiveDetours() {
     try {
-        const detours = await api.getDetours();
-        renderActiveDetours(detours);
-        // Don't auto-render on map — user uses Show button per detour
+        const detours = await api.getDetours(); // This gets ALL detours on server
+        renderDetourLists(detours);
     } catch (err) {
         console.error('Failed to load detours:', err);
     }
 }
 
-function renderActiveDetours(detours: DetourData[]) {
-    const container = document.getElementById('active-detours-list')!;
-    const countBadge = document.getElementById('active-detour-count')!;
-    cachedDetours = detours; // cache for View All toggle
+function renderDetourLists(detours: DetourData[]) {
+    cachedDetours = detours;
+    const listActive = document.getElementById('list-active-detours');
+    const listUpcoming = document.getElementById('list-upcoming-detours');
+    // Widgets
+    const countActive = document.getElementById('count-active-detours');
+    const countUpcoming = document.getElementById('count-upcoming-detours');
+    const activeDetourCountBadge = document.getElementById('active-detour-count');
+
+    if (!listActive || !listUpcoming) return;
 
     const now = new Date();
+
+    // Split detours
     const active = detours.filter(d => new Date(d.startTime) <= now && new Date(d.endTime) >= now);
-    countBadge.textContent = String(active.length);
+    const upcoming = detours.filter(d => new Date(d.startTime) > now);
 
-    if (detours.length === 0) {
-        container.innerHTML = '<p class="empty-state">No active detours</p>';
-        return;
-    }
+    // Update counts
+    if (countActive) countActive.textContent = String(active.length);
+    if (countUpcoming) countUpcoming.textContent = String(upcoming.length);
+    if (activeDetourCountBadge) activeDetourCountBadge.textContent = String(active.length); // Keep the map view badge updated too?
 
-    // Group by route
-    const grouped = new Map<string, DetourData[]>();
-    for (const d of detours) {
-        const key = d.routeId;
-        if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key)!.push(d);
-    }
-
-    let html = '';
-    for (const [routeId, routeDetours] of grouped) {
-        const route = allRoutes.find(r => r.route_id === routeId);
-        const routeName = route ? route.route_short_name : routeId;
-        const routeLong = route?.route_long_name || '';
-        const activeCount = routeDetours.filter(d => new Date(d.startTime) <= now && new Date(d.endTime) >= now).length;
-
-        html += `<div class="detour-route-group">
-          <div class="detour-route-header">
-            <div>
-              <span class="route-badge" style="background:#${route?.route_color || '3b82f6'};color:#${route?.route_text_color || 'ffffff'};display:inline-flex;margin-right:8px">${routeName}</span>
-              <span class="detour-route-name">${routeLong}</span>
-            </div>
-            <span class="detour-route-count">${activeCount} active</span>
-          </div>`;
-
-        for (const d of routeDetours) {
-            const isActive = new Date(d.startTime) <= now && new Date(d.endTime) >= now;
-            const dirLabel = route?.directions?.[d.directionId] || (d.directionId === 0 ? 'Outbound' : 'Inbound');
-            const divergeName = d.startStopInfo?.stop_name || d.startStopId;
-            const rejoinName = d.endStopInfo?.stop_name || d.endStopId;
-
-            html += `
-          <div class="detour-card" data-detour-id="${d.id}">
-            <div class="detour-card-header">
-              <div class="detour-card-dir">${dirLabel}</div>
-              <div style="display:flex;gap:4px">
-                <button class="btn btn-secondary btn-sm btn-show-detour" data-detour-id="${d.id}" title="Show on map">👁</button>
-                <button class="btn btn-danger btn-sm btn-end-detour" data-detour-id="${d.id}">End</button>
-              </div>
-            </div>
-            <div class="detour-card-description">${d.description || 'No description'}</div>
-            <div class="detour-card-segment">
-              <span class="segment-label">⚠</span> ${divergeName} → <span class="segment-label">✓</span> ${rejoinName}
-            </div>
-            <div class="detour-card-time">
-              ${isActive ? '🔴 ACTIVE' : '⏳ Scheduled'} · ${formatTime(d.startTime)} → ${formatTime(d.endTime)}
-            </div>
-            <div class="detour-card-expand" data-detour-id="${d.id}">▸ Details</div>
-            <div class="detour-card-details" id="detour-details-${d.id}" style="display:none">
-              <div class="detail-loading">Loading...</div>
-            </div>
-          </div>`;
+    // Helper to render a group
+    const renderGroup = (items: DetourData[], container: HTMLElement) => {
+        if (items.length === 0) {
+            container.innerHTML = '<p class="empty-state">None</p>';
+            return;
         }
 
-        html += '</div>';
-    }
+        // Group by route
+        const grouped = new Map<string, DetourData[]>();
+        for (const d of items) {
+            const key = d.routeId;
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key)!.push(d);
+        }
 
-    container.innerHTML = html;
+        let html = '';
+        for (const [routeId, routeDetours] of grouped) {
+            const route = allRoutes.find(r => r.route_id === routeId);
+            const routeName = route ? route.route_short_name : routeId;
+            const routeLong = route?.route_long_name || '';
+            const badgeColor = route?.route_color || '3b82f6';
+            const badgeText = route?.route_text_color || 'ffffff';
 
-    bindActiveDetourEvents(container, detours);
+            html += `<div class="detour-route-group">
+              <div class="detour-route-header">
+                <div>
+                  <span class="route-badge" style="background:#${badgeColor};color:#${badgeText};display:inline-flex;margin-right:8px">${routeName}</span>
+                  <span class="detour-route-name">${routeLong}</span>
+                </div>
+                <span class="detour-route-count" style="color:var(--text-muted)">${routeDetours.length}</span>
+              </div>`;
+
+            for (const d of routeDetours) {
+                const isActive = new Date(d.startTime) <= now && new Date(d.endTime) >= now;
+                const dirLabel = route?.directions?.[d.directionId] || (d.directionId === 0 ? 'Outbound' : 'Inbound');
+                const divergeName = d.startStopInfo?.stop_name || d.startStopId;
+                const rejoinName = d.endStopInfo?.stop_name || d.endStopId;
+
+                html += `
+              <div class="detour-card" data-detour-id="${d.id}">
+                <div class="detour-card-header">
+                  <div class="detour-card-dir">${dirLabel}</div>
+                  <div style="display:flex;gap:4px">
+                    <button class="btn btn-secondary btn-sm btn-show-detour" data-detour-id="${d.id}" title="Show on map">👁</button>
+                    ${isActive ? `<button class="btn btn-danger btn-sm btn-end-detour" data-detour-id="${d.id}">End</button>` : ''}
+                    ${!isActive ? `<button class="btn btn-danger btn-sm btn-end-detour" data-detour-id="${d.id}">Delete</button>` : ''}
+                  </div>
+                </div>
+                <div class="detour-card-description">${d.description || 'No description'}</div>
+                <div class="detour-card-segment">
+                  <span class="segment-label">⚠</span> ${divergeName} <br>
+                  <span class="segment-label">✓</span> ${rejoinName}
+                </div>
+                <div class="detour-card-time">
+                  ${isActive ? '🔴 ACTIVE' : '⏳ Scheduled'} · ${formatTime(d.startTime)} → ${formatTime(d.endTime)}
+                </div>
+                <div class="detour-card-expand" data-detour-id="${d.id}">▸ Details</div>
+                <div class="detour-card-details" id="detour-details-${d.id}" style="display:none">
+                  <div class="detail-loading">Loading...</div>
+                </div>
+              </div>`;
+            }
+            html += '</div>';
+        }
+        container.innerHTML = html;
+        bindActiveDetourEvents(container, detours);
+    };
+
+    renderGroup(active, listActive);
+    renderGroup(upcoming, listUpcoming);
 }
 
 function bindActiveDetourEvents(container: HTMLElement, detours: DetourData[]) {
@@ -1257,10 +1396,10 @@ function bindActiveDetourEvents(container: HTMLElement, detours: DetourData[]) {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();
             const id = (e.target as HTMLElement).getAttribute('data-detour-id')!;
-            if (confirm('End this detour?')) {
+            showConfirm('Are you sure you want to end this detour early?', async () => {
                 await api.deleteDetour(id);
                 await loadActiveDetours();
-            }
+            }, 'End Detour');
         });
     });
 
@@ -1632,65 +1771,152 @@ async function pollStatus() {
     }
 }
 
+// ─── Cancelled View State ───
+let selectedCancelledIds = new Set<string>();
+
 async function loadCancelledTrips() {
+    selectedCancelledIds.clear();
     try {
         const cancellations = await api.getCancellations();
         const container = document.getElementById('cancelled-trips-list');
-        const countBadge = document.getElementById('nav-cancelled-count');
-
         if (!container) return;
 
-        // Cast to any until services.ts type is fully propagated if needed
         const items = cancellations as any[];
 
-        // Update nav badge
-        if (countBadge) {
-            countBadge.textContent = String(items.length);
-            countBadge.style.display = items.length > 0 ? 'inline-block' : 'none';
-        }
+        // Update widget count
+        const widgetCount = document.getElementById('count-cancelled');
+        if (widgetCount) widgetCount.textContent = String(items.length);
 
         renderHomeCancelledSummary(items.length);
 
         if (items.length === 0) {
             container.innerHTML = '<div class="empty-state">No cancelled trips</div>';
+            renderCancelledActionBar();
             return;
         }
 
-        container.innerHTML = items.map((t: any) => `
-            <div class="cancelled-trip-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                    <span style="font-weight:700;color:var(--text-primary)">Route ${t.route_id}</span>
-                    <span style="font-size:11px;color:var(--text-muted)">Trip ${t.trip_id}</span>
-                </div>
-                <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">
-                    ${t.trip_headsign || 'Unknown Headsign'}
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <span style="font-size:11px;color:var(--accent-red)">CANCELLED</span>
-                    <button class="btn btn-secondary btn-sm" onclick="restoreTrip('${t.trip_id}')">Restore</button>
-                </div>
-            </div>
-        `).join('');
-
-
-        // Bind restore buttons
-        // Note: onclick string handler above is brittle. Better to bind properly.
+        renderCancelledList(items);
+        renderCancelledActionBar();
     } catch (err) {
         console.error('Failed to load cancellations:', err);
     }
 }
 
+function renderCancelledList(items: any[]) {
+    const container = document.getElementById('cancelled-trips-list');
+    if (!container) return;
+
+    const formatTime = (secs: number) => {
+        const h = Math.floor(secs / 3600) % 24;
+        const m = Math.floor((secs % 3600) / 60);
+        return `${h}:${String(m).padStart(2, '0')}`;
+    };
+
+    container.innerHTML = items.map((t: any) => {
+        const isChecked = selectedCancelledIds.has(t.trip_id);
+        const routeColor = t.route_color ? `#${t.route_color}` : 'var(--accent-blue)';
+        const routeTextColor = t.route_text_color ? `#${t.route_text_color}` : '#fff';
+        const startStr = t.start_time != null ? formatTime(t.start_time) : '—';
+        const endStr = t.end_time != null ? formatTime(t.end_time) : '—';
+        const first = t.first_stop_name || '—';
+        const last = t.last_stop_name || '—';
+
+        return `
+        <div class="cancelled-trip-card${isChecked ? ' card-selected' : ''}" data-trip-id="${t.trip_id}">
+            <div style="display:flex;align-items:flex-start;gap:10px">
+                <input type="checkbox" class="cancel-check" data-trip-id="${t.trip_id}"
+                    style="margin-top:3px;flex-shrink:0;cursor:pointer;accent-color:var(--accent-blue)"
+                    ${isChecked ? 'checked' : ''}>
+                <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:0">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                        <span style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;background:${routeColor};color:${routeTextColor};white-space:nowrap">
+                            ${t.route_short_name || t.route_id}
+                        </span>
+                        <span style="font-size:10px;color:var(--text-muted)">${startStr} – ${endStr}</span>
+                    </div>
+                    <div style="display:flex;align-items:stretch;gap:6px">
+                        <div style="display:flex;flex-direction:column;align-items:center;padding:2px 0;flex-shrink:0">
+                            <div style="width:7px;height:7px;border-radius:50%;background:var(--text-secondary);flex-shrink:0"></div>
+                            <div style="width:1px;flex:1;min-height:5px;background:var(--border)"></div>
+                            <div style="width:7px;height:7px;border-radius:50%;border:1.5px solid var(--text-muted);flex-shrink:0"></div>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+                            <span style="font-size:10px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${first}">${first}</span>
+                            <span style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${last}">${last}</span>
+                        </div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary btn-sm btn-restore-single" data-trip-id="${t.trip_id}"
+                    style="flex-shrink:0;align-self:center">Restore</button>
+            </div>
+        </div>`;
+    }).join('');
+
+    container.querySelectorAll('.cancel-check').forEach(cb => {
+        cb.addEventListener('change', (e) => {
+            const input = e.target as HTMLInputElement;
+            const id = input.dataset.tripId!;
+            if (input.checked) selectedCancelledIds.add(id);
+            else selectedCancelledIds.delete(id);
+            input.closest('.cancelled-trip-card')?.classList.toggle('card-selected', input.checked);
+            renderCancelledActionBar();
+        });
+    });
+
+    container.querySelectorAll('.btn-restore-single').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const id = (e.currentTarget as HTMLElement).dataset.tripId!;
+            doRestoreTrips([id]);
+        });
+    });
+}
+
+function renderCancelledActionBar() {
+    const slot = document.getElementById('cancelled-action-bar-slot');
+    if (!slot) return;
+    const count = selectedCancelledIds.size;
+    if (count === 0) { slot.innerHTML = ''; return; }
+    slot.innerHTML = `
+    <div class="block-action-bar">
+        <span class="block-action-info">
+            <strong>${count}</strong> trip${count !== 1 ? 's' : ''} selected
+        </span>
+        <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" id="btn-restore-selected">Restore ${count}</button>
+            <button class="btn btn-outline btn-sm" id="btn-clear-cancelled-sel">Clear</button>
+        </div>
+    </div>`;
+    document.getElementById('btn-restore-selected')?.addEventListener('click', () => {
+        doRestoreTrips(Array.from(selectedCancelledIds));
+    });
+    document.getElementById('btn-clear-cancelled-sel')?.addEventListener('click', () => {
+        selectedCancelledIds.clear();
+        loadCancelledTrips();
+    });
+}
+
+function doRestoreTrips(ids: string[]) {
+    const label = ids.length === 1 ? 'this trip' : `${ids.length} trips`;
+    showConfirm(`Restore ${label}?`, async () => {
+        try {
+            await Promise.all(ids.map(id => api.restoreTrip(id)));
+            selectedCancelledIds.clear();
+            await loadCancelledTrips();
+            if (activeView === 'blocks') loadBlockView();
+        } catch (err: any) { showError('Failed to restore: ' + err.message); }
+    }, 'Restore Trip');
+}
+
 function renderHomeCancelledSummary(count: number) {
     const container = document.getElementById('home-cancelled-summary');
-    if (!container) return; // Hook this up in index.html
+    if (!container) return;
 
     if (count === 0) {
-        // Force display for now so user can see it exists
         container.style.display = 'flex';
         container.innerHTML = `
             <div style="font-size:24px;font-weight:700;color:var(--text-muted);line-height:1">0</div>
             <div style="display:flex;flex-direction:column;justify-content:center">
-                <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled</div>
+                <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled Trips</div>
                 <div style="font-size:11px;color:var(--text-secondary)">Today</div>
             </div>
         `;
@@ -1701,21 +1927,11 @@ function renderHomeCancelledSummary(count: number) {
     container.innerHTML = `
         <div style="font-size:24px;font-weight:700;color:var(--accent-red);line-height:1">${count}</div>
         <div style="display:flex;flex-direction:column;justify-content:center">
-            <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled</div>
+            <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled Trips</div>
             <div style="font-size:11px;color:var(--text-secondary)">Today</div>
         </div>
     `;
 }
-
-// Global scope for onclick (hack, but effective for innerHTML)
-(window as any).restoreTrip = async (tripId: string) => {
-    if (!confirm('Restore this trip?')) return;
-    try {
-        await api.restoreTrip(tripId);
-        loadCancelledTrips();
-        if (activeView === 'blocks') loadBlockView(); // refresh blocks if active
-    } catch (err) { alert('Failed to restore: ' + err); }
-};
 
 function getNowSeconds(): number {
     const now = new Date();
@@ -1776,9 +1992,33 @@ function bindEvents() {
     });
 
     // Block view controls handled in setupNavigation()
-}    /**
-     * Start new detour creation (setup for opposite direction)
-     */
+
+    // ─── Sidebar View Switching ───
+    document.getElementById('widget-cancelled')?.addEventListener('click', () => {
+        // For now, cancelled trips is a separate view (existing navigation)
+        // Switch to "Cancelled" tab in sidebar nav (leftmost)
+        const btn = document.querySelector('.nav-item[data-view="cancelled"]') as HTMLElement;
+        if (btn) btn.click();
+    });
+
+    document.getElementById('widget-active-detours')?.addEventListener('click', showDetourView);
+    document.getElementById('widget-upcoming-detours')?.addEventListener('click', showDetourView);
+    document.getElementById('btn-back-home')?.addEventListener('click', showHomeView);
+}
+
+function showHomeView() {
+    document.getElementById('sidebar-home')!.style.display = 'flex';
+    document.getElementById('sidebar-detours')!.style.display = 'none';
+    document.getElementById('detour-panel')!.style.display = 'none';
+}
+
+function showDetourView() {
+    document.getElementById('sidebar-home')!.style.display = 'none';
+    document.getElementById('sidebar-detours')!.style.display = 'flex';
+    document.getElementById('detour-panel')!.style.display = 'none';
+    loadActiveDetours(); // Refresh
+}
+
 function startDetourCreationOppositeDirection() {
     // Only allow switching if step is 'select-diverge' (Step 1) or 'idle'
     if (detourStep === 'select-diverge' || detourStep === 'idle') {
@@ -2012,6 +2252,10 @@ function toggleView(view: 'map' | 'blocks') {
 async function loadBlockView(forceRefresh = false) {
     const container = document.getElementById('block-view-content')!;
 
+    // Always clear multi-select when the view is (re)loaded
+    selectedTripIds.clear();
+    lastClickedTripId = null;
+
     // Check cache
     if (!forceRefresh && cachedBlocks.length > 0 && loadedBlockDate === blockViewDate) {
         renderBlockViewchart();
@@ -2050,12 +2294,56 @@ function renderBlockViewchart() {
 
     filtered.sort((a, b) => a.block_id.localeCompare(b.block_id));
 
+    // Rebuild flat trip order for shift-click range selection
+    visibleTripOrder = [];
+    for (const block of filtered) {
+        for (const trip of block.trips) {
+            visibleTripOrder.push(trip.trip_id);
+        }
+    }
+
+    // Prune selectedTripIds to only trips still visible (e.g. filter changed)
+    for (const id of selectedTripIds) {
+        if (!visibleTripOrder.includes(id)) selectedTripIds.delete(id);
+    }
+
     const START_HOUR = 4;
     const END_HOUR = 30; // 30 = 6am next day
-    const PIXELS_PER_HOUR = 100; // Fixed width
+    const PIXELS_PER_HOUR = 100;
     const CHART_WIDTH = (END_HOUR - START_HOUR) * PIXELS_PER_HOUR;
+    const nowSec = getNowSeconds();
 
-    let html = `<div class="block-chart-container" style="width:${CHART_WIDTH + 80}px">`; // +80 for label width
+    // ── Action bar (shown when trips are selected) ──────────────────────────
+    const selCount = selectedTripIds.size;
+    const cancellableCount = [...selectedTripIds].filter(id => {
+        for (const b of cachedBlocks) {
+            const t = b.trips.find(t => t.trip_id === id);
+            if (t) return !t.is_cancelled && parseTime(t.end_time) > nowSec;
+        }
+        return false;
+    }).length;
+
+    const actionSlot = document.getElementById('block-action-bar-slot')!;
+    if (selCount > 0) {
+        actionSlot.innerHTML = `
+        <div class="block-action-bar" id="block-action-bar">
+            <span class="block-action-info">
+                <strong>${selCount}</strong> trip${selCount !== 1 ? 's' : ''} selected
+                ${cancellableCount > 0 ? `<span class="block-action-sub">&nbsp;·&nbsp;${cancellableCount} cancellable</span>` : ''}
+            </span>
+            <div style="display:flex;gap:8px">
+                ${cancellableCount > 0
+                ? `<button class="btn btn-danger btn-sm" id="btn-cancel-selected">Cancel ${cancellableCount}</button>`
+                : ''}
+                <button class="btn btn-secondary btn-sm" id="btn-clear-selection">Clear</button>
+            </div>
+        </div>`;
+    } else {
+        actionSlot.innerHTML = '';
+    }
+
+    // ── Chart ───────────────────────────────────────────────────────────────
+    let html = `<div class="block-chart-container" style="width:${CHART_WIDTH + 80}px">`;
 
     // Header
     html += `<div class="timeline-header"><div class="time-scale" style="width:${CHART_WIDTH}px">`;
@@ -2070,8 +2358,17 @@ function renderBlockViewchart() {
 
     // Blocks
     for (const block of filtered) {
-        html += `<div class="block-row">`;
-        html += `<div class="block-label" title="Block ${block.block_id}">${block.block_id}</div>`;
+        const blockTrips = block.trips;
+        const blockTripIds = blockTrips.map(t => t.trip_id);
+        const selectedInBlock = blockTripIds.filter(id => selectedTripIds.has(id)).length;
+        const cancellableInBlock = blockTrips.filter(t => !t.is_cancelled && parseTime(t.end_time) > nowSec).length;
+        const labelClass = selectedInBlock === 0 ? '' :
+            (selectedInBlock === cancellableInBlock ? 'all-selected' : 'partial-selected');
+
+        html += `<div class="block-row" data-block-id="${block.block_id}">`;
+        html += `<div class="block-label ${labelClass}"
+                      data-block-id="${block.block_id}"
+                      title="Click to select all trips in block ${block.block_id}">${block.block_id}</div>`;
         html += `<div class="block-track">`;
 
         // Grid lines
@@ -2092,73 +2389,9 @@ function renderBlockViewchart() {
 
             const isCancelled = trip.is_cancelled;
             const isDetoured = trip.is_detoured;
-            let tripColor = '#3b82f6'; // default blue
+            const isSelected = selectedTripIds.has(trip.trip_id);
 
-            // Fetch route info to determine color logic
             const route = allRoutes.find(r => r.route_id === trip.route_id);
-            if (route) {
-                // If cancelled, color is handled by CSS class. If active:
-                // We want to color by direction. 
-                // Let's use the route's base color for Dir 0, and a shifted hue for Dir 1?
-                // Or just use two hardcoded distinct colors if route_color is not available.
-                // Better: Use route_color for Dir 0, and maybe an inverted or complementary for Dir 1.
-                // Simpler approach requested by user: "Inbound/Outbound" distinct colors.
-                // Let's use a standard palette: 
-                // Dir 0: Route Color (or Blue)
-                // Dir 1: A distinct variant (e.g. darker or complementary)
-
-                // Let's try: Dir 0 = Route Color, Dir 1 = Purple/Orange fixed?
-                // The user said: "alternate in color by direction... like a block of #8 trips".
-                // Stop trying to derive from route color which might be anything.
-                // Let's use two distinct "Direction" colors for the graph bars, ignoring route color?
-                // OR: Use the route color for Dir 0, and a "Darker/Lighter" version for Dir 1?
-                // Let's go with: Dir 0 = Route Color, Dir 1 = Route Text Color (inverted) or just a fixed secondary color.
-                // User said "color code trips by direction... inbound/outbound".
-
-                // Implementation: 
-                // If Dir 0: Use Route Color
-                // If Dir 1: Use a "Direction 1" variant.
-                // Let's just use an opacity or pattern? No, user explicitly said color.
-
-                if (trip.direction_id === 1) {
-                    // Shift hue or usage a secondary palette
-                    tripColor = '#8b5cf6'; // Violet for inbound/dir 1
-                    if (route.route_color) {
-                        // Simple heuristic: if route is blue-ish, make dir 1 orange-ish?
-                        // Let's just stick to a fixed "Outbound=RouteColor, Inbound=Gray/Dark" for contrast?
-                        // "Alternate in color"
-                        tripColor = `#${route.route_color}`;
-                        // adjust for direction
-                        // This is hard without a color library.
-                        // Let's use a CSS class approach or simple logic.
-                        // Let's use: Dir 0 = Route Color. Dir 1 = Route Color but with a filter? 
-                        // No, let's just use:
-                        // Dir 0: #3b82f6 (Blue) or Route Color
-                        // Dir 1: #f59e0b (Amber) or just different.
-                        // Actually, user cited #8 (Halsted) which is Green.
-                        // If 66 (Chicago) is Blue.
-                        // Let's use:
-                        // Dir 0 = Route Color
-                        // Dir 1 = Route Color (Darkened)
-                    }
-                } else {
-                    tripColor = route.route_color ? `#${route.route_color}` : '#3b82f6';
-                }
-            }
-
-            // Simplest interpretation of "alternate":
-            // Dir 0: Route Color
-            // Dir 1: Darker/Different Route Color. 
-            // Since we don't have color manipulation easily, let's use a border or pattern?
-            // "Color code trips by direction".
-
-            // Let's try:
-            // Dir 0: Route Color
-            // Dir 1: The "Text Color" from GTFS (usually black/white) -> Not good for bars.
-            // Let's use a global palette for directions if route color is standard.
-            // But routes have specific colors.
-            // Let's use: Dir 0 = Route Color. Dir 1 = Route Color with 50% white overlay (lighter)?
-            // We can do this with linear-gradient.
 
             const bgStyle = isCancelled
                 ? ''
@@ -2166,12 +2399,15 @@ function renderBlockViewchart() {
                     ? `background:repeating-linear-gradient(45deg, #${route?.route_color || '3b82f6'}, #${route?.route_color || '3b82f6'} 10px, white 10px, white 12px)` // Hatched for Dir 1
                     : `background:#${route?.route_color || '3b82f6'}`);
 
-            const additionalClass = isCancelled ? 'cancelled' : (isDetoured ? 'detoured' : '');
+            const additionalClass = [
+                isCancelled ? 'cancelled' : (isDetoured ? 'detoured' : ''),
+                isSelected ? 'trip-selected' : ''
+            ].filter(Boolean).join(' ');
 
             html += `<div class="trip-bar ${additionalClass}" 
                           style="left:${startPx}px;width:${widthPx}px;${bgStyle}"
                           data-trip-id="${trip.trip_id}"
-                          title="Route ${trip.route_id} (${trip.trip_id})">
+                          title="Route ${trip.route_id} (${trip.trip_id})&#10;Ctrl/⌘+click to select · Shift+click to range-select">
                         <span style="font-weight:700;margin-right:4px">${trip.route_id}</span> 
                         ${trip.trip_headsign}
                      </div>`;
@@ -2179,12 +2415,85 @@ function renderBlockViewchart() {
 
         html += `</div></div>`; // Close track, Close row
     }
-    html += `</div>`; // Close container
+    html += `</div>`; // Close chart container
 
     container.innerHTML = html;
 
-    // Event delegation is now handled in setupNavigation()
-    console.log(`[TDM] Rendered ${filtered.length} blocks.`);
+    // Wire up action bar buttons (now in the sibling slot, not in container)
+    document.getElementById('btn-cancel-selected')?.addEventListener('click', cancelSelectedTrips);
+    document.getElementById('btn-clear-selection')?.addEventListener('click', () => {
+        selectedTripIds.clear();
+        lastClickedTripId = null;
+        renderBlockViewchart();
+    });
+
+    console.log(`[TDM] Rendered ${filtered.length} blocks, ${selCount} selected.`);
+}
+
+/** Select / deselect all cancellable trips in a block (toggle). */
+function selectBlock(blockId: string) {
+    const block = cachedBlocks.find(b => b.block_id === blockId);
+    if (!block) return;
+
+    const nowSec = getNowSeconds();
+    const cancellable = block.trips.filter(t => !t.is_cancelled && parseTime(t.end_time) > nowSec);
+    if (cancellable.length === 0) {
+        showAlert(`No cancellable trips in block ${blockId}.`);
+        return;
+    }
+
+    // Toggle: if all are already selected, deselect; otherwise select all
+    const allSelected = cancellable.every(t => selectedTripIds.has(t.trip_id));
+    if (allSelected) {
+        cancellable.forEach(t => selectedTripIds.delete(t.trip_id));
+    } else {
+        cancellable.forEach(t => selectedTripIds.add(t.trip_id));
+        lastClickedTripId = cancellable[cancellable.length - 1].trip_id;
+    }
+    renderBlockViewchart();
+}
+
+/** Confirm and cancel all currently selected (and cancellable) trips. */
+async function cancelSelectedTrips() {
+    const nowSec = getNowSeconds();
+    const toCancel: string[] = [];
+    for (const id of selectedTripIds) {
+        for (const b of cachedBlocks) {
+            const trip = b.trips.find(t => t.trip_id === id);
+            if (trip && !trip.is_cancelled && parseTime(trip.end_time) > nowSec) {
+                toCancel.push(id);
+                break;
+            }
+        }
+    }
+    if (toCancel.length === 0) {
+        showAlert('No cancellable trips in selection (they may already be cancelled or in the past).');
+        return;
+    }
+
+    showConfirm(
+        `Cancel ${toCancel.length} selected trip${toCancel.length !== 1 ? 's' : ''}?\nThis cannot be undone from this dialog.`,
+        async () => {
+            try {
+                await Promise.all(toCancel.map(id => api.cancelTrip(id)));
+                // Update local cache so the chart re-renders correctly
+                for (const id of toCancel) {
+                    for (const b of cachedBlocks) {
+                        const trip = b.trips.find(t => t.trip_id === id);
+                        if (trip) { trip.is_cancelled = true; break; }
+                    }
+                }
+                selectedTripIds.clear();
+                lastClickedTripId = null;
+                renderBlockViewchart();
+            } catch (err: any) {
+                showError('Failed to cancel some trips: ' + err.message);
+            }
+        },
+        'Cancel Selected Trips',
+        `Cancel ${toCancel.length} Trip${toCancel.length !== 1 ? 's' : ''}`,
+        'Go Back'
+    );
 }
 
 function parseTime(time: string | number): number {
@@ -2326,24 +2635,33 @@ function showTripPopover(tripElem: HTMLElement, tripId: string) {
     // Button Listeners
     popover.querySelector('#btn-close-popover-x')?.addEventListener('click', () => popover.remove());
 
-    popover.querySelector('#btn-cancel-trip')?.addEventListener('click', async () => {
-        if (!confirm('Are you sure you want to CANCEL this trip?')) return;
-        try {
-            await api.cancelTrip(tripId);
-            trip!.is_cancelled = true;
-            popover.remove();
-            renderBlockViewchart();
-        } catch (err) { alert('Failed to cancel trip: ' + err); }
-    });
+    const btnCancel = popover.querySelector('#btn-cancel-trip');
+    if (btnCancel) {
+        btnCancel.addEventListener('click', async () => {
+            showConfirm('Are you sure you want to CANCEL this trip?', async () => {
+                try {
+                    await api.cancelTrip(tripId);
+                    trip!.is_cancelled = true;
+                    popover.remove();
+                    renderBlockViewchart();
+                } catch (err: any) { showError('Failed to cancel trip: ' + err.message); }
+            }, 'Cancel Trip', 'Yes, Cancel Trip', 'No, Keep It');
+        });
+    }
 
-    popover.querySelector('#btn-restore-trip')?.addEventListener('click', async () => {
-        try {
-            await api.restoreTrip(tripId);
-            trip!.is_cancelled = false;
-            popover.remove();
-            renderBlockViewchart();
-        } catch (err) { alert('Failed to restore trip: ' + err); }
-    });
+    const btnRestore = popover.querySelector('#btn-restore-trip');
+    if (btnRestore) {
+        btnRestore.addEventListener('click', async () => {
+            showConfirm('Restore this trip? The cancellation will be removed.', async () => {
+                try {
+                    await api.restoreTrip(tripId);
+                    trip!.is_cancelled = false;
+                    popover.remove();
+                    renderBlockViewchart();
+                } catch (err: any) { showError('Failed to restore trip: ' + err.message); }
+            }, 'Restore Trip', 'Yes, Restore', 'No');
+        });
+    }
 }
 
 // Update bindEvents to include new listeners
@@ -2394,6 +2712,8 @@ function setupNavigation() {
 
     const dateInput = document.getElementById('block-view-date') as HTMLInputElement;
     if (dateInput) {
+        const today = new Date().toISOString().slice(0, 10);
+        dateInput.min = today;   // Prevent selecting past dates
         dateInput.value = blockViewDate;
         dateInput.addEventListener('change', (e) => {
             blockViewDate = (e.target as HTMLInputElement).value;
@@ -2404,14 +2724,61 @@ function setupNavigation() {
     const filterInput = document.getElementById('block-view-filter');
     if (filterInput) filterInput.addEventListener('input', renderBlockViewchart);
 
-    // 7. Event Delegation for Block Viewer (Optimization)
+    // 7. Event Delegation for Block Viewer
     const blockContent = document.getElementById('block-view-content');
     if (blockContent) {
         blockContent.addEventListener('click', (e) => {
-            const target = (e.target as HTMLElement).closest('.trip-bar');
-            if (target) {
-                const tripId = (target as HTMLElement).dataset.tripId;
-                if (tripId) showTripPopover(target as HTMLElement, tripId);
+            const clickedEl = e.target as HTMLElement;
+
+            // — Block label click: select/deselect all trips in the block
+            const labelTarget = clickedEl.closest('.block-label') as HTMLElement | null;
+            if (labelTarget?.dataset.blockId) {
+                selectBlock(labelTarget.dataset.blockId);
+                return;
+            }
+
+            // — Trip bar click
+            const tripTarget = clickedEl.closest('.trip-bar') as HTMLElement | null;
+            if (!tripTarget) return;
+            const tripId = tripTarget.dataset.tripId;
+            if (!tripId) return;
+
+            if (e.ctrlKey || e.metaKey) {
+                // Ctrl/⌘: toggle this trip in/out of selection
+                if (selectedTripIds.has(tripId)) {
+                    selectedTripIds.delete(tripId);
+                } else {
+                    selectedTripIds.add(tripId);
+                    lastClickedTripId = tripId;
+                }
+                renderBlockViewchart();
+
+            } else if (e.shiftKey && lastClickedTripId) {
+                // Shift: range-select from anchor to here (inclusive)
+                const anchorIdx = visibleTripOrder.indexOf(lastClickedTripId);
+                const targetIdx = visibleTripOrder.indexOf(tripId);
+                if (anchorIdx !== -1 && targetIdx !== -1) {
+                    const [lo, hi] = anchorIdx < targetIdx
+                        ? [anchorIdx, targetIdx]
+                        : [targetIdx, anchorIdx];
+                    for (let i = lo; i <= hi; i++) {
+                        selectedTripIds.add(visibleTripOrder[i]);
+                    }
+                    renderBlockViewchart();
+                }
+
+            } else {
+                // Plain click: open the trip popover (existing behaviour)
+                showTripPopover(tripTarget, tripId);
+            }
+        });
+
+        // Escape key: clear selection when block viewer is active
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && activeView === 'blocks' && selectedTripIds.size > 0) {
+                selectedTripIds.clear();
+                lastClickedTripId = null;
+                renderBlockViewchart();
             }
         });
     }

@@ -1,5 +1,7 @@
 // ─── Vehicle Simulation Types ───
 
+import type { StopTime } from '../gtfs/types.js';
+
 export interface VehicleState {
     vehicleId: string;
     tripId: string;
@@ -20,6 +22,7 @@ export interface VehicleState {
     // Schedule progress
     currentStopIndex: number;  // index into the trip's stop time array
     nextStopId: string;
+    cachedStopTimes: StopTime[]; // cached at spawn, never changes
     status: 'IN_TRANSIT' | 'AT_STOP' | 'COMPLETED';
 
     // Timing
