@@ -80,7 +80,11 @@ export interface SystemStatus {
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`);
+    const res = await fetch(`${API_BASE}${path}`, {
+        headers: {
+            'X-API-Key': 'dev-key'
+        }
+    });
     if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
     return res.json();
 }
@@ -99,14 +103,17 @@ export const api = {
     createDetour: async (data: any): Promise<DetourData> => {
         const res = await fetch(`${API_BASE}/detours`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
             body: JSON.stringify(data),
         });
         if (!res.ok) throw new Error(`API error: ${res.status}`);
         return res.json();
     },
     deleteDetour: async (id: string): Promise<void> => {
-        const res = await fetch(`${API_BASE}/detours/${id}`, { method: 'DELETE' });
+        const res = await fetch(`${API_BASE}/detours/${id}`, { 
+            method: 'DELETE',
+            headers: { 'X-API-Key': 'dev-key' }
+        });
         if (!res.ok) throw new Error(`API error: ${res.status}`);
     },
     getVehicles: () => fetchJson<{ count: number; vehicles: VehicleData[] }>('/vehicles'),
@@ -116,12 +123,18 @@ export const api = {
     getBlocks: (dateStr?: string) => fetchJson<BlockData[]>('/blocks' + (dateStr ? `?date=${dateStr}` : '')),
     getCancellations: () => fetchJson<CancelledTripData[]>('/cancellations'),
     cancelTrip: async (tripId: string) => {
-        const res = await fetch(`${API_BASE}/trips/${tripId}/cancel`, { method: 'POST' });
+        const res = await fetch(`${API_BASE}/trips/${tripId}/cancel`, { 
+            method: 'POST',
+            headers: { 'X-API-Key': 'dev-key' }
+        });
         if (!res.ok) throw new Error(`API error: ${res.status}`);
         return res.json();
     },
     restoreTrip: async (tripId: string) => {
-        const res = await fetch(`${API_BASE}/trips/${tripId}/restore`, { method: 'POST' });
+        const res = await fetch(`${API_BASE}/trips/${tripId}/restore`, { 
+            method: 'POST',
+            headers: { 'X-API-Key': 'dev-key' }
+        });
         if (!res.ok) throw new Error(`API error: ${res.status}`);
         return res.json();
     }

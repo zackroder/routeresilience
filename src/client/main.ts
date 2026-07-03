@@ -396,6 +396,17 @@ async function selectRoute(routeId: string) {
     await loadRouteDisplay(null);
 }
 
+function clearAllMapLayers() {
+    routeShapeLayer.clearLayers();
+    stopsLayer.clearLayers();
+    activeDetoursLayer.clearLayers();
+    detourShapeLayer.clearLayers();
+    replacementStopsLayer.clearLayers();
+    candidateStopsLayer.clearLayers();
+    nearbyStopsLayer.clearLayers();
+    vehiclesLayer.clearLayers();
+}
+
 function deselectRoute() {
     selectedRoute = null;
     currentRouteStops = [];
@@ -410,17 +421,14 @@ function deselectRoute() {
     const btnCreate = document.getElementById('btn-create-detour-panel');
     if (btnCreate) btnCreate.style.display = 'none';
 
-    // Clear map layers
-    routeShapeLayer.clearLayers();
-    stopsLayer.clearLayers();
+    clearAllMapLayers();
 }
 
 async function loadRouteDisplay(direction: number | null = null, preserveView: boolean = false) {
     if (!selectedRoute) return;
 
     try {
-        routeShapeLayer.clearLayers();
-        stopsLayer.clearLayers();
+        clearAllMapLayers();
         const bounds = L.latLngBounds([]);
 
         // If direction is null, load both (0 and 1)
@@ -1412,11 +1420,12 @@ function renderDetourLists(detours: DetourData[]) {
                 const rejoinName = d.endStopInfo?.stop_name || d.endStopId;
 
                 html += `
-              <div class="detour-card" data-detour-id="${d.id}">
+              <div class="detour-card detour-card-clickable" data-route-id="${routeId}" style="cursor:pointer">
                 <div class="detour-card-header">
                   <div class="detour-card-dir">${dirLabel}</div>
                   <div style="display:flex;gap:4px">
-                    <button class="btn btn-secondary btn-sm btn-show-detour" data-detour-id="${d.id}" title="Show on map">👁</button>
+                    <!-- The specific view button is kept for clarity, but clicking the card will do the same -->
+                    <button class="btn btn-secondary btn-sm btn-show-detour" data-route-id="${routeId}" title="Show on map">👁</button>
                     ${isActive ? `<button class="btn btn-danger btn-sm btn-end-detour" data-detour-id="${d.id}">End</button>` : ''}
                     ${!isActive ? `<button class="btn btn-danger btn-sm btn-end-detour" data-detour-id="${d.id}">Delete</button>` : ''}
                   </div>
@@ -1465,14 +1474,22 @@ function bindActiveDetourEvents(container: HTMLElement, detours: DetourData[]) {
         });
     });
 
-    // Bind show-on-map buttons
-    container.querySelectorAll('.btn-show-detour').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
+    // Bind show-on-map buttons and entire card clicks
+    container.querySelectorAll('.detour-card-clickable, .btn-show-detour').forEach(el => {
+        el.addEventListener('click', async (e) => {
             e.stopPropagation();
-            const id = (e.target as HTMLElement).getAttribute('data-detour-id')!;
-            const detour = detours.find(d => d.id === id);
-            if (!detour) return;
-            await showDetourOnMap(detour);
+            
+            // If clicking the card but we actually clicked a button inside (other than the show button), ignore
+            const target = e.target as HTMLElement;
+            if (el.classList.contains('detour-card-clickable') && target.closest('button') && !target.closest('.btn-show-detour')) {
+                return;
+            }
+
+            const routeId = (el as HTMLElement).getAttribute('data-route-id')!;
+            const routeDetours = detours.filter(d => d.routeId === routeId);
+            if (routeDetours.length > 0) {
+                await showDetoursOnMap(routeDetours);
+            }
         });
     });
 
@@ -1503,12 +1520,20 @@ let cachedDetours: DetourData[] = [];
 let allDetoursVisible = false;
 
 /**
- * Show a single detour on the map with full route context and affected segment highlighting.
+ * Show detours on the map with full route context and affected segment highlighting.
  */
-async function showDetourOnMap(detour: DetourData) {
-    activeDetoursLayer.clearLayers();
-    await addRouteContextToLayer(detour, activeDetoursLayer);
-    addDetourOverlayToLayer(detour, activeDetoursLayer);
+async function showDetoursOnMap(detours: DetourData[]) {
+    deselectRoute(); // Clears all layers and selected route state
+    
+    // Un-highlight view all if it was active
+    allDetoursVisible = false;
+    const btn = document.getElementById('btn-toggle-all-detours');
+    if (btn) btn.textContent = '🗺 View All';
+
+    await Promise.all(detours.map(async d => {
+        await addRouteContextToLayer(d, activeDetoursLayer);
+        addDetourOverlayToLayer(d, activeDetoursLayer);
+    }));
 
     // Zoom to show everything
     const bounds = activeDetoursLayer.getBounds();
@@ -1628,7 +1653,7 @@ async function toggleAllDetours() {
         return;
     }
 
-    activeDetoursLayer.clearLayers();
+    clearAllMapLayers();
     const now = new Date();
     const activeDetours = cachedDetours.filter(d =>
         new Date(d.startTime) <= now && new Date(d.endTime) >= now
