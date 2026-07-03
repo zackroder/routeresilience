@@ -9,6 +9,7 @@ import { DetourStore } from './detour/store.js';
 import { SimulationEngine } from './simulation/engine.js';
 import { FeedGenerator } from './realtime/feed.js';
 import { PredictionEngine } from './realtime/predictions.js';
+import { apiKeyMiddleware, rateLimitMiddleware } from './api/middleware.js';
 
 const PORT = 4000;
 
@@ -24,7 +25,7 @@ async function main() {
     const detourStore = new DetourStore();
     const cancellationStore = new CancellationStore();
     const detourEngine = new DetourEngine(repo, detourStore);
-    const simulation = new SimulationEngine(repo, detourEngine);
+    const simulation = new SimulationEngine(repo, detourEngine, detourStore);
     const predictions = new PredictionEngine(repo, simulation);
     const feedGenerator = new FeedGenerator(repo, detourEngine, detourStore, simulation, predictions, cancellationStore);
 
@@ -39,6 +40,10 @@ async function main() {
     const app = express();
     app.use(cors());
     app.use(express.json());
+
+    // # Rate limiting & Auth for all /api routes
+    app.use('/api', apiKeyMiddleware);
+    app.use('/api', rateLimitMiddleware);
 
     const apiRouter = createApiRouter(repo, detourEngine, detourStore, simulation, feedGenerator, cancellationStore);
     app.use('/api', apiRouter);

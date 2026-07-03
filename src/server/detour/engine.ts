@@ -79,18 +79,30 @@ export class DetourEngine {
      * Get all affected trip IDs for a detour on a specific date.
      */
     getAffectedTripIds(detour: Detour, dateStr: string): string[] {
-        // Query trips that have both start and end stops in the correct order
-        const stmt = this.repo.getDb().prepare(`
+        let query = `
             SELECT t.trip_id, t.service_id 
             FROM trips t
-            JOIN stop_times st1 ON t.trip_id = st1.trip_id
-            JOIN stop_times st2 ON t.trip_id = st2.trip_id
-            WHERE t.route_id = ? AND t.direction_id = ?
-            AND st1.stop_id = ? AND st2.stop_id = ?
-            AND st1.stop_sequence < st2.stop_sequence
-        `);
+        `;
+        let where = `WHERE t.route_id = ? AND t.direction_id = ?`;
+        const params: any[] = [detour.routeId, detour.directionId];
 
-        const trips = stmt.all(detour.routeId, detour.directionId, detour.startStopId, detour.endStopId) as { trip_id: string, service_id: string }[];
+        if (detour.startStopId) {
+            query += ` JOIN stop_times st1 ON t.trip_id = st1.trip_id `;
+            where += ` AND st1.stop_id = ?`;
+            params.push(detour.startStopId);
+        }
+        if (detour.endStopId) {
+            query += ` JOIN stop_times st2 ON t.trip_id = st2.trip_id `;
+            where += ` AND st2.stop_id = ?`;
+            params.push(detour.endStopId);
+        }
+
+        if (detour.startStopId && detour.endStopId) {
+            where += ` AND st1.stop_sequence < st2.stop_sequence`;
+        }
+
+        const stmt = this.repo.getDb().prepare(query + where);
+        const trips = stmt.all(...params) as { trip_id: string, service_id: string }[];
 
         const validTripIds: string[] = [];
         const serviceCache = new Map<string, boolean>();
@@ -141,33 +153,39 @@ export class DetourEngine {
         if (!originalStopTimes || originalStopTimes.length === 0) return null;
 
         // Find indices of start and end stops in the original sequence
-        const startIdx = originalStopTimes.findIndex(st => st.stop_id === detour.startStopId);
-        const endIdx = originalStopTimes.findIndex(st => st.stop_id === detour.endStopId);
-        if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) return null;
+        const startIdx = detour.startStopId ? originalStopTimes.findIndex(st => st.stop_id === detour.startStopId) : -1;
+        const endIdx = detour.endStopId ? originalStopTimes.findIndex(st => st.stop_id === detour.endStopId) : originalStopTimes.length;
+        if ((detour.startStopId && startIdx === -1) || (detour.endStopId && endIdx === -1) || (startIdx !== -1 && endIdx !== originalStopTimes.length && startIdx >= endIdx)) return null;
 
         const modifiedStopTimes: ModifiedStopTime[] = [];
         let seq = 1;
 
         // Part 1: Original stops before & including the diverge point
-        for (let i = 0; i <= startIdx; i++) {
-            const st = originalStopTimes[i];
-            const stop = this.repo.getStop(st.stop_id);
-            modifiedStopTimes.push({
-                stopId: st.stop_id,
-                stopName: stop?.stop_name || st.stop_id,
-                stopSequence: seq++,
-                arrivalTime: st.arrival_time,
-                departureTime: st.departure_time,
-                lat: stop?.stop_lat || 0,
-                lon: stop?.stop_lon || 0,
-                isTemporary: false,
-                isReplacement: false,
-            });
+        if (startIdx !== -1) {
+            for (let i = 0; i <= startIdx; i++) {
+                const st = originalStopTimes[i];
+                const stop = this.repo.getStop(st.stop_id);
+                modifiedStopTimes.push({
+                    stopId: st.stop_id,
+                    stopName: stop?.stop_name || st.stop_id,
+                    stopSequence: seq++,
+                    arrivalTime: st.arrival_time,
+                    departureTime: st.departure_time,
+                    lat: stop?.stop_lat || 0,
+                    lon: stop?.stop_lon || 0,
+                    isTemporary: false,
+                    isReplacement: false,
+                });
+            }
         }
 
         // Part 2: Replacement stops along the detour
-        const divergeStopTime = originalStopTimes[startIdx];
-        let currentTime = divergeStopTime.departure_time;
+        let currentTime: number;
+        if (startIdx !== -1) {
+            currentTime = originalStopTimes[startIdx].departure_time;
+        } else {
+            currentTime = originalStopTimes[0].arrival_time;
+        }
 
         for (const rs of detour.replacementStops) {
             currentTime += rs.travelTimeFromPrevious;
@@ -186,25 +204,27 @@ export class DetourEngine {
         }
 
         // Part 3: Original stops from rejoin point onward
-        const originalRejoinArrival = originalStopTimes[endIdx].arrival_time;
-        const detourTimeShift = currentTime + (detour.replacementStops.length > 0
-            ? 60  // 60s travel from last replacement stop to rejoin
-            : 0) - originalRejoinArrival;
+        if (endIdx !== originalStopTimes.length) {
+            const originalRejoinArrival = originalStopTimes[endIdx].arrival_time;
+            const detourTimeShift = currentTime + (detour.replacementStops.length > 0
+                ? 60  // 60s travel from last replacement stop to rejoin
+                : 0) - originalRejoinArrival;
 
-        for (let i = endIdx; i < originalStopTimes.length; i++) {
-            const st = originalStopTimes[i];
-            const stop = this.repo.getStop(st.stop_id);
-            modifiedStopTimes.push({
-                stopId: st.stop_id,
-                stopName: stop?.stop_name || st.stop_id,
-                stopSequence: seq++,
-                arrivalTime: st.arrival_time + detourTimeShift,
-                departureTime: st.departure_time + detourTimeShift,
-                lat: stop?.stop_lat || 0,
-                lon: stop?.stop_lon || 0,
-                isTemporary: false,
-                isReplacement: false,
-            });
+            for (let i = endIdx; i < originalStopTimes.length; i++) {
+                const st = originalStopTimes[i];
+                const stop = this.repo.getStop(st.stop_id);
+                modifiedStopTimes.push({
+                    stopId: st.stop_id,
+                    stopName: stop?.stop_name || st.stop_id,
+                    stopSequence: seq++,
+                    arrivalTime: st.arrival_time + detourTimeShift,
+                    departureTime: st.departure_time + detourTimeShift,
+                    lat: stop?.stop_lat || 0,
+                    lon: stop?.stop_lon || 0,
+                    isTemporary: false,
+                    isReplacement: false,
+                });
+            }
         }
 
         return {
@@ -245,9 +265,124 @@ export class DetourEngine {
         return `${y}${m}${d}`;
     }
 
-    // TODO: In the future, this should stitch together the pre-detour path + detour geometry + post-detour path
-    // from the GTFS shape data for a smooth continuous polyline on the map.
+    /**
+     * Compute a continuous [lat, lon][] path for the entire trip under detour.
+     * originalShape[0..diverge] + detourCoords + originalShape[rejoin..end]
+     */
+    private findClosestShapeIndex(points: import('../gtfs/types.js').ShapePoint[], lat: number, lon: number): number {
+        let minIdx = -1;
+        let minDist = Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            const dist = haversineMeters(lat, lon, p.shape_pt_lat, p.shape_pt_lon);
+            if (dist < minDist) {
+                minDist = dist;
+                minIdx = i;
+            }
+        }
+        return minIdx;
+    }
+
+    /**
+     * Compute a continuous [lat, lon][] path for the entire trip under detour.
+     * originalShape[0..diverge] + detourCoords + originalShape[rejoin..end]
+     * Uses shape_dist_traveled for robust stitching, falling back to geometric matching if missing.
+     */
+    computeFullTripPath(detour: Detour | CreateDetourRequest): [number, number][] {
+        const trip = this.repo.getTripsForRoute(detour.routeId, detour.directionId)[0];
+        if (!trip || !trip.shape_id) return detour.detourShape;
+
+        const originalPoints = this.repo.getShape(trip.shape_id);
+        if (!originalPoints || originalPoints.length < 2) return detour.detourShape;
+
+        // Get distance markers for diverge/rejoin stops from stop_times
+        const stopTimes = this.repo.getStopTimes(trip.trip_id);
+
+        let startDist: number | null = null;
+        let startSt;
+        if (detour.startStopId) {
+            startSt = stopTimes.find(st => st.stop_id === detour.startStopId);
+            if (!startSt) return detour.detourShape;
+            startDist = startSt.shape_dist_traveled;
+        }
+
+        let endDist: number | null = null;
+        let endSt;
+        if (detour.endStopId) {
+            endSt = stopTimes.find(st => st.stop_id === detour.endStopId);
+            if (!endSt) return detour.detourShape;
+            endDist = endSt.shape_dist_traveled;
+        }
+
+        const validStart = detour.startStopId ? startDist != null : true;
+        const validEnd = detour.endStopId ? endDist != null : true;
+        const validOrder = (startDist != null && endDist != null) ? endDist > startDist : true;
+        const hasValidDist = validStart && validEnd && validOrder && (startDist != null || endDist != null);
+
+        const fullPath: [number, number][] = [];
+
+        if (hasValidDist && (startDist != null || endDist != null)) {
+            // 1. Original up to diverge (points where dist <= startDist)
+            if (detour.startStopId && startDist != null) {
+                for (const pt of originalPoints) {
+                    if (pt.shape_dist_traveled <= startDist) {
+                        fullPath.push([pt.shape_pt_lat, pt.shape_pt_lon]);
+                    }
+                }
+            }
+
+            // 2. Detour segment (client-side polyline)
+            fullPath.push(...detour.detourShape);
+
+            // 3. Original from rejoin to end (points where dist >= endDist)
+            if (detour.endStopId && endDist != null) {
+                for (const pt of originalPoints) {
+                    if (pt.shape_dist_traveled >= endDist) {
+                        fullPath.push([pt.shape_pt_lat, pt.shape_pt_lon]);
+                    }
+                }
+            }
+        } else {
+            // Fallback: geometric matching
+            let startIdx = -1;
+            if (detour.startStopId) {
+                const startStop = this.repo.getStop(detour.startStopId);
+                if (!startStop) return detour.detourShape;
+                startIdx = this.findClosestShapeIndex(originalPoints, startStop.stop_lat, startStop.stop_lon);
+            }
+
+            let endIdx = originalPoints.length;
+            if (detour.endStopId) {
+                const endStop = this.repo.getStop(detour.endStopId);
+                if (!endStop) return detour.detourShape;
+                endIdx = this.findClosestShapeIndex(originalPoints, endStop.stop_lat, endStop.stop_lon);
+            }
+
+            if ((detour.startStopId && startIdx === -1) ||
+                (detour.endStopId && endIdx === originalPoints.length) ||
+                (startIdx !== -1 && endIdx !== originalPoints.length && startIdx >= endIdx)) {
+                return detour.detourShape;
+            }
+
+            if (startIdx !== -1) {
+                for (let i = 0; i <= startIdx; i++) {
+                    fullPath.push([originalPoints[i].shape_pt_lat, originalPoints[i].shape_pt_lon]);
+                }
+            }
+
+            fullPath.push(...detour.detourShape);
+
+            if (endIdx !== originalPoints.length) {
+                for (let i = endIdx; i < originalPoints.length; i++) {
+                    fullPath.push([originalPoints[i].shape_pt_lat, originalPoints[i].shape_pt_lon]);
+                }
+            }
+        }
+
+        return fullPath;
+    }
+
     computeFullDetourPath(req: CreateDetourRequest): [number, number][] {
-        return req.detourShape;
+        return this.computeFullTripPath(req);
     }
 }

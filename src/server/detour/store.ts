@@ -1,4 +1,6 @@
 import { Detour } from './types.js';
+import fs from 'fs';
+import path from 'path';
 
 /**
  * In-memory store for detours.
@@ -7,12 +9,45 @@ import { Detour } from './types.js';
 export class DetourStore {
     private detours: Map<string, Detour> = new Map();
 
+    private readonly storePath = path.resolve(process.cwd(), 'data', 'detours.json');
+
+    constructor() {
+        this.load();
+    }
+
+    private load(): void {
+        try {
+            if (fs.existsSync(this.storePath)) {
+                const data = fs.readFileSync(this.storePath, 'utf-8');
+                const array: Detour[] = JSON.parse(data);
+                for (const d of array) {
+                    this.detours.set(d.id, d);
+                }
+                console.log(`Loaded ${this.detours.size} detours from disk`);
+            }
+        } catch (e) {
+            console.error('Failed to load detours from disk:', e);
+        }
+    }
+
+    private save(): void {
+        try {
+            const data = JSON.stringify(this.getAll(), null, 2);
+            fs.writeFileSync(this.storePath, data, 'utf-8');
+        } catch (e) {
+            console.error('Failed to save detours to disk:', e);
+        }
+    }
+
     add(detour: Detour): void {
         this.detours.set(detour.id, detour);
+        this.save();
     }
 
     remove(id: string): boolean {
-        return this.detours.delete(id);
+        const removed = this.detours.delete(id);
+        if (removed) this.save();
+        return removed;
     }
 
     get(id: string): Detour | undefined {

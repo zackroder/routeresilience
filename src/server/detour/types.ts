@@ -17,10 +17,10 @@ export interface Detour {
     routeId: string;
     directionId: number;
 
-    /** Stop ID where the detour diverges from the normal route */
-    startStopId: string;
-    /** Stop ID where the detour rejoins the normal route */
-    endStopId: string;
+    /** Stop ID where the detour diverges from the normal route. Null if replaces start. */
+    startStopId: string | null;
+    /** Stop ID where the detour rejoins the normal route. Null if replaces end. */
+    endStopId: string | null;
 
     /** Ordered replacement stops along the detour path */
     replacementStops: ReplacementStopDef[];
@@ -39,6 +39,9 @@ export interface Detour {
     /** Human-readable description for ServiceAlerts */
     description: string;
 
+    /** Stops skipped during this detour */
+    skippedStops?: { stopId: string; stopName: string }[];
+
     createdAt: string;
 }
 
@@ -46,12 +49,13 @@ export interface Detour {
 export interface CreateDetourRequest {
     routeId: string;
     directionId: number;
-    startStopId: string;
-    endStopId: string;
+    startStopId: string | null;
+    endStopId: string | null;
     replacementStops: ReplacementStopDef[];
     detourShape: [number, number][];
     path?: [number, number][];
     startTime: string;
     endTime: string;
     description: string;
+    skippedStops?: { stopId: string; stopName: string }[];
 }

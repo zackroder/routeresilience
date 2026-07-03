@@ -59,6 +59,9 @@ let lastClickedTripId: string | null = null;
 let visibleTripOrder: string[] = []; // flat ordered list of trip IDs from last render (for shift-range)
 // let pixelsPerHour = 100; // Zoom removed
 
+// Detour expansion state
+let expandedDetourIds = new Set<string>();
+
 
 // ─── Modal Helpers ───
 
@@ -393,6 +396,25 @@ async function selectRoute(routeId: string) {
     await loadRouteDisplay(null);
 }
 
+function deselectRoute() {
+    selectedRoute = null;
+    currentRouteStops = [];
+
+    // Clear highlights in list
+    document.querySelectorAll('.route-item').forEach(el => el.classList.remove('selected'));
+
+    // Hide UI elements
+    const dirGroup = document.getElementById('direction-group');
+    if (dirGroup) dirGroup.style.display = 'none';
+
+    const btnCreate = document.getElementById('btn-create-detour-panel');
+    if (btnCreate) btnCreate.style.display = 'none';
+
+    // Clear map layers
+    routeShapeLayer.clearLayers();
+    stopsLayer.clearLayers();
+}
+
 async function loadRouteDisplay(direction: number | null = null, preserveView: boolean = false) {
     if (!selectedRoute) return;
 
@@ -559,10 +581,10 @@ function onStopClick(stop: StopInfo) {
         finalizeRejoinStop(stop);
     } else if (detourStep === 'trace-path') {
         // In trace-path, clicking a route stop is ONLY for setting it as rejoin
-        const divergeIdx = currentRouteStops.findIndex(s => s.stop_id === divergeStopId);
+        const divergeIdx = divergeStopId ? currentRouteStops.findIndex(s => s.stop_id === divergeStopId) : -1;
         const thisIdx = currentRouteStops.findIndex(s => s.stop_id === stop.stop_id);
 
-        if (divergeIdx !== -1 && thisIdx > divergeIdx) {
+        if ((divergeIdx !== -1 && thisIdx > divergeIdx) || (divergeStopId === null && thisIdx !== -1)) {
             // Check if this is a valid downstream stop
             showRejoinOptionsPopup(stop);
             return;
@@ -634,6 +656,9 @@ async function onMapClick(e: any) {
             redrawDetourPath();
         }
 
+    } else if (detourStep === 'idle' && selectedRoute) {
+        // Deselect if clicking map in idle state with a route selected
+        deselectRoute();
     }
 }
 
@@ -948,17 +973,35 @@ function updateDetourStepUI() {
     switch (detourStep) {
         case 'select-diverge':
             instructions.innerHTML = 'Click on a stop where the detour <strong>begins</strong> (diverge point).';
+            instructions.innerHTML += '<br><br><button class="btn btn-secondary btn-sm" id="btn-skip-diverge" style="width:100%">Detour Route Start</button>';
             document.getElementById('detour-config')!.style.display = 'none';
             replacement.style.display = 'none';
             candidateStopsLayer.clearLayers();
+
+            document.getElementById('btn-skip-diverge')?.addEventListener('click', () => {
+                divergeStopId = null;
+                divergeStop = null;
+                detourStep = 'trace-path';
+                detourPathPoints = [];
+                updateDetourStepUI();
+                showMapTooltip([map.getCenter().lat, map.getCenter().lng], 'Route start replaced. Click the map to trace the path.', 3000);
+            });
             break;
         case 'trace-path':
             instructions.innerHTML = 'Click the map to trace the detour path <em>(snaps to roads)</em>. Click a <strong>route stop</strong> to set the rejoin point, or right-click to undo.';
             instructions.innerHTML += '<br><br><div style="display:flex;gap:6px;flex-wrap:wrap">' +
                 '<button class="btn btn-secondary btn-sm" id="btn-back-to-diverge">← Back</button>' +
+                '<button class="btn btn-secondary btn-sm" id="btn-skip-rejoin">Detour Route End</button>' +
                 '<button class="btn btn-secondary btn-sm" id="btn-undo-segment">↩ Undo</button></div>';
             document.getElementById('btn-back-to-diverge')?.addEventListener('click', () => goBackStep('select-diverge'));
             document.getElementById('btn-undo-segment')?.addEventListener('click', undoLastSegment);
+            document.getElementById('btn-skip-rejoin')?.addEventListener('click', () => {
+                rejoinStopId = null;
+                rejoinStop = null;
+                detourStep = 'add-stops';
+                updateDetourStepUI();
+                showMapTooltip([map.getCenter().lat, map.getCenter().lng], 'Route end replaced. Now add replacement stops if needed.', 3000);
+            });
             replacement.style.display = 'block';
             candidateStopsLayer.clearLayers();
             break;
@@ -1138,7 +1181,7 @@ function goBackStep(targetStep: DetourStep) {
 // ─── Activate Detour ───
 
 async function activateDetour() {
-    if (!selectedRoute || !divergeStopId || !rejoinStopId) return;
+    if (!selectedRoute || divergeStopId === undefined || rejoinStopId === undefined) return;
 
     // Disable button to prevent duplicates
     const activateBtn = document.getElementById('activate-detour') as HTMLButtonElement;
@@ -1172,6 +1215,17 @@ async function activateDetour() {
         const savedDivergeStop = divergeStop;
         const savedRejoinStop = rejoinStop;
 
+        // Calculate skipped stops
+        let skippedStops: { stopId: string; stopName: string }[] = [];
+        const dIdx = divergeStopId ? currentRouteStops.findIndex(s => s.stop_id === divergeStopId) : -1;
+        const rIdx = rejoinStopId ? currentRouteStops.findIndex(s => s.stop_id === rejoinStopId) : currentRouteStops.length;
+        if (dIdx >= -1 && rIdx <= currentRouteStops.length && rIdx > dIdx + 1) {
+            skippedStops = currentRouteStops.slice(dIdx + 1, rIdx).map(s => ({
+                stopId: s.stop_id,
+                stopName: s.stop_name
+            }));
+        }
+
         const detour = await api.createDetour({
             routeId: selectedRoute.route_id,
             directionId: selectedDirection,
@@ -1182,6 +1236,7 @@ async function activateDetour() {
             startTime: new Date(startTime).toISOString(),
             endTime: new Date(endTime).toISOString(),
             description,
+            skippedStops,
         });
 
         console.log('Detour created:', detour);
@@ -1374,8 +1429,8 @@ function renderDetourLists(detours: DetourData[]) {
                 <div class="detour-card-time">
                   ${isActive ? '🔴 ACTIVE' : '⏳ Scheduled'} · ${formatTime(d.startTime)} → ${formatTime(d.endTime)}
                 </div>
-                <div class="detour-card-expand" data-detour-id="${d.id}">▸ Details</div>
-                <div class="detour-card-details" id="detour-details-${d.id}" style="display:none">
+                <div class="detour-card-expand" data-detour-id="${d.id}">${expandedDetourIds.has(d.id) ? '▾' : '▸'} Details</div>
+                <div class="detour-card-details" id="detour-details-${d.id}" style="display:${expandedDetourIds.has(d.id) ? 'block' : 'none'}">
                   <div class="detail-loading">Loading...</div>
                 </div>
               </div>`;
@@ -1384,6 +1439,13 @@ function renderDetourLists(detours: DetourData[]) {
         }
         container.innerHTML = html;
         bindActiveDetourEvents(container, detours);
+
+        // Auto-load details for expanded items (after re-render)
+        items.forEach(d => {
+            if (expandedDetourIds.has(d.id)) {
+                loadDetourDetails(d.id, detours);
+            }
+        });
     };
 
     renderGroup(active, listActive);
@@ -1425,10 +1487,12 @@ function bindActiveDetourEvents(container: HTMLElement, detours: DetourData[]) {
             if (detailsEl.style.display === 'none') {
                 detailsEl.style.display = 'block';
                 expandEl.textContent = '▾ Details';
+                expandedDetourIds.add(id);
                 await loadDetourDetails(id, detours);
             } else {
                 detailsEl.style.display = 'none';
                 expandEl.textContent = '▸ Details';
+                expandedDetourIds.delete(id);
             }
         });
     });
@@ -1626,6 +1690,14 @@ async function loadDetourDetails(detourId: string, detours: DetourData[]) {
         }
     }
 
+    // Skipped stops
+    if (detour.skippedStops && detour.skippedStops.length > 0) {
+        html += '<div class="detail-section"><strong>Skipped Stops:</strong></div>';
+        for (const ss of detour.skippedStops) {
+            html += `<div class="detail-stop">❌ ${ss.stopName}</div>`;
+        }
+    }
+
     detailsEl.innerHTML = html || '<div class="detail-row">No additional details</div>';
 }
 
@@ -1812,53 +1884,110 @@ function renderCancelledList(items: any[]) {
         return `${h}:${String(m).padStart(2, '0')}`;
     };
 
-    container.innerHTML = items.map((t: any) => {
-        const isChecked = selectedCancelledIds.has(t.trip_id);
-        const routeColor = t.route_color ? `#${t.route_color}` : 'var(--accent-blue)';
-        const routeTextColor = t.route_text_color ? `#${t.route_text_color}` : '#fff';
-        const startStr = t.start_time != null ? formatTime(t.start_time) : '—';
-        const endStr = t.end_time != null ? formatTime(t.end_time) : '—';
-        const first = t.first_stop_name || '—';
-        const last = t.last_stop_name || '—';
+    // Group items by block_id
+    const grouped = new Map<string, any[]>();
+    items.forEach(item => {
+        const bId = item.block_id || 'No Block';
+        if (!grouped.has(bId)) grouped.set(bId, []);
+        grouped.get(bId)!.push(item);
+    });
 
-        return `
-        <div class="cancelled-trip-card${isChecked ? ' card-selected' : ''}" data-trip-id="${t.trip_id}">
-            <div style="display:flex;align-items:flex-start;gap:10px">
-                <input type="checkbox" class="cancel-check" data-trip-id="${t.trip_id}"
-                    style="margin-top:3px;flex-shrink:0;cursor:pointer;accent-color:var(--accent-blue)"
-                    ${isChecked ? 'checked' : ''}>
-                <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:0">
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                        <span style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;background:${routeColor};color:${routeTextColor};white-space:nowrap">
-                            ${t.route_short_name || t.route_id}
-                        </span>
-                        <span style="font-size:10px;color:var(--text-muted)">${startStr} – ${endStr}</span>
-                    </div>
-                    <div style="display:flex;align-items:stretch;gap:6px">
-                        <div style="display:flex;flex-direction:column;align-items:center;padding:2px 0;flex-shrink:0">
-                            <div style="width:7px;height:7px;border-radius:50%;background:var(--text-secondary);flex-shrink:0"></div>
-                            <div style="width:1px;flex:1;min-height:5px;background:var(--border)"></div>
-                            <div style="width:7px;height:7px;border-radius:50%;border:1.5px solid var(--text-muted);flex-shrink:0"></div>
+    let html = '';
+    grouped.forEach((trips, blockId) => {
+        const allChecked = trips.every(t => selectedCancelledIds.has(t.trip_id));
+
+        html += `
+        <div class="cancelled-block-group" style="grid-column: 1 / -1; margin-top: 16px;">
+            <div class="detour-section-header" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; border-bottom:1px solid var(--border-subtle); padding-bottom:4px;">
+                <input type="checkbox" class="block-select-all" data-block-id="${blockId}" 
+                    style="cursor:pointer; accent-color:var(--accent-blue)" ${allChecked ? 'checked' : ''}>
+                <span>Block: <strong>${blockId}</strong></span>
+                <span style="font-size:10px; color:var(--text-muted); text-transform:none; font-weight:normal;">(${trips.length} trips)</span>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px;">
+                ${trips.map((t: any) => {
+            const isChecked = selectedCancelledIds.has(t.trip_id);
+            const routeColor = t.route_color ? `#${t.route_color}` : 'var(--accent-blue)';
+            const routeTextColor = t.route_text_color ? `#${t.route_text_color}` : '#fff';
+            const startStr = t.start_time != null ? formatTime(t.start_time) : '—';
+            const endStr = t.end_time != null ? formatTime(t.end_time) : '—';
+            const first = t.first_stop_name || '—';
+            const last = t.last_stop_name || '—';
+
+            return `
+                    <div class="cancelled-trip-card${isChecked ? ' card-selected' : ''}" data-trip-id="${t.trip_id}" data-block-id="${blockId}">
+                        <div style="display:flex;align-items:flex-start;gap:10px">
+                            <input type="checkbox" class="cancel-check" data-trip-id="${t.trip_id}" data-block-id="${blockId}"
+                                style="margin-top:3px;flex-shrink:0;cursor:pointer;accent-color:var(--accent-blue)"
+                                ${isChecked ? 'checked' : ''}>
+                            <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:0">
+                                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                                    <span style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;background:${routeColor};color:${routeTextColor};white-space:nowrap">
+                                        ${t.route_short_name || t.route_id}
+                                    </span>
+                                    <span style="font-size:10px;color:var(--text-muted)">${startStr} – ${endStr}</span>
+                                </div>
+                                <div style="display:flex;align-items:stretch;gap:6px">
+                                    <div style="display:flex;flex-direction:column;align-items:center;padding:2px 0;flex-shrink:0">
+                                        <div style="width:7px;height:7px;border-radius:50%;background:var(--text-secondary);flex-shrink:0"></div>
+                                        <div style="width:1px;flex:1;min-height:5px;background:var(--border)"></div>
+                                        <div style="width:7px;height:7px;border-radius:50%;border:1.5px solid var(--text-muted);flex-shrink:0"></div>
+                                    </div>
+                                    <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+                                        <span style="font-size:10px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${first}">${first}</span>
+                                        <span style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${last}">${last}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <button class="btn btn-secondary btn-sm btn-restore-single" data-trip-id="${t.trip_id}"
+                                style="flex-shrink:0;align-self:center">Restore</button>
                         </div>
-                        <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
-                            <span style="font-size:10px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${first}">${first}</span>
-                            <span style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${last}">${last}</span>
-                        </div>
-                    </div>
-                </div>
-                <button class="btn btn-secondary btn-sm btn-restore-single" data-trip-id="${t.trip_id}"
-                    style="flex-shrink:0;align-self:center">Restore</button>
+                    </div>`;
+        }).join('')}
             </div>
         </div>`;
-    }).join('');
+    });
 
+    container.innerHTML = html;
+
+    // "Select All" in block header
+    container.querySelectorAll('.block-select-all').forEach(cb => {
+        cb.addEventListener('change', (e) => {
+            const input = e.target as HTMLInputElement;
+            const bId = input.dataset.blockId!;
+            const tripChecks = container.querySelectorAll<HTMLInputElement>(`.cancel-check[data-block-id="${bId}"]`);
+
+            tripChecks.forEach(tripCb => {
+                const tripId = tripCb.dataset.tripId!;
+                tripCb.checked = input.checked;
+                if (input.checked) selectedCancelledIds.add(tripId);
+                else selectedCancelledIds.delete(tripId);
+                tripCb.closest('.cancelled-trip-card')?.classList.toggle('card-selected', input.checked);
+            });
+            renderCancelledActionBar();
+        });
+    });
+
+    // Individual trip checkboxes
     container.querySelectorAll('.cancel-check').forEach(cb => {
         cb.addEventListener('change', (e) => {
             const input = e.target as HTMLInputElement;
             const id = input.dataset.tripId!;
+            const bId = input.dataset.blockId!;
+
             if (input.checked) selectedCancelledIds.add(id);
             else selectedCancelledIds.delete(id);
+
             input.closest('.cancelled-trip-card')?.classList.toggle('card-selected', input.checked);
+
+            // Update the "Select All" checkbox for this block
+            const blockCb = container.querySelector<HTMLInputElement>(`.block-select-all[data-block-id="${bId}"]`);
+            if (blockCb) {
+                const tripChecks = Array.from(container.querySelectorAll<HTMLInputElement>(`.cancel-check[data-block-id="${bId}"]`));
+                blockCb.checked = tripChecks.every(c => c.checked);
+                blockCb.indeterminate = tripChecks.some(c => c.checked) && !blockCb.checked;
+            }
+
             renderCancelledActionBar();
         });
     });

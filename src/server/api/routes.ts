@@ -106,6 +106,7 @@ export function createApiRouter(
                 route_color: route?.route_color,
                 route_text_color: route?.route_text_color,
                 direction_id: trip.direction_id,
+                block_id: trip.block_id,
                 start_time: trip.start_time,
                 end_time: trip.end_time,
                 first_stop_name: firstStop?.stop_name || null,
@@ -369,7 +370,7 @@ export function createApiRouter(
     router.post('/detours', (req: Request, res: Response) => {
         try {
             const body = req.body as CreateDetourRequest;
-            if (!body.routeId || !body.startStopId || !body.endStopId || !body.startTime || !body.endTime) {
+            if (!body.routeId || body.startStopId === undefined || body.endStopId === undefined || !body.startTime || !body.endTime) {
                 res.status(400).json({ error: 'Missing required fields: routeId, startStopId, endStopId, startTime, endTime' });
                 return;
             }
@@ -383,8 +384,8 @@ export function createApiRouter(
     /** List all detours (enriched with stop location data) */
     router.get('/detours', (_req: Request, res: Response) => {
         const detours = detourStore.getAll().map(d => {
-            const startStop = repo.getStop(d.startStopId);
-            const endStop = repo.getStop(d.endStopId);
+            const startStop = d.startStopId ? repo.getStop(d.startStopId) : null;
+            const endStop = d.endStopId ? repo.getStop(d.endStopId) : null;
             return {
                 ...d,
                 startStopInfo: startStop ? {
@@ -399,6 +400,7 @@ export function createApiRouter(
                     stop_lat: endStop.stop_lat,
                     stop_lon: endStop.stop_lon,
                 } : null,
+                skippedStops: d.skippedStops || [],
             };
         });
         res.json(detours);
@@ -427,9 +429,10 @@ export function createApiRouter(
     // ─── GTFS-RT Feed ───
 
     /** Binary protobuf GTFS-RT feed */
-    router.get('/gtfs-rt', async (_req: Request, res: Response) => {
+    router.get('/gtfs-rt', async (req: Request, res: Response) => {
         try {
-            const buffer = await feedGenerator.generateFeed();
+            const isDifferential = req.query.differential === 'true';
+            const buffer = await feedGenerator.generateFeed(new Date(), isDifferential);
             res.set('Content-Type', 'application/x-protobuf');
             res.send(buffer);
         } catch (err: any) {
@@ -439,14 +442,87 @@ export function createApiRouter(
     });
 
     /** JSON debug view of GTFS-RT feed */
-    router.get('/gtfs-rt/json', async (_req: Request, res: Response) => {
+    router.get('/gtfs-rt/json', async (req: Request, res: Response) => {
         try {
-            const json = await feedGenerator.generateFeedJson();
+            const isDifferential = req.query.differential === 'true';
+            const json = await feedGenerator.generateFeedJson(new Date(), isDifferential);
             res.json(json);
         } catch (err: any) {
             console.error('Error generating GTFS-RT feed:', err);
             res.status(500).json({ error: err.message });
         }
+    });
+
+    /** SSE stream of real-time feed updates (push every 2s) */
+    router.get('/gtfs-rt/stream', (req: Request, res: Response) => {
+        // SSE headers
+        res.set({
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no', // disable nginx buffering
+        });
+        res.flushHeaders();
+
+        const pushInterval = parseInt(req.query.interval as string) || 2000;
+        const includePositions = req.query.positions !== 'false'; // default: include
+        let alive = true;
+
+        const send = async () => {
+            if (!alive) return;
+            try {
+                const json = await feedGenerator.generateFeedJson();
+                const vehicles = simulation.getVehicles();
+
+                // Compute delay stats
+                const delays = vehicles.filter(v => v.status !== 'COMPLETED').map(v => v.delaySeconds);
+                const avgDelay = delays.length > 0 ? delays.reduce((a, b) => a + b, 0) / delays.length : 0;
+                const maxDelay = delays.length > 0 ? Math.max(...delays) : 0;
+                const onTimeCount = delays.filter(d => Math.abs(d) < 60).length;
+
+                const payload = {
+                    timestamp: Date.now(),
+                    entityCount: json?.entity?.length ?? 0,
+                    vehicleCount: vehicles.length,
+                    stats: {
+                        avgDelaySeconds: Math.round(avgDelay),
+                        maxDelaySeconds: Math.round(maxDelay),
+                        onTimePercent: delays.length > 0 ? Math.round((onTimeCount / delays.length) * 100) : 100,
+                    },
+                    ...(includePositions ? {
+                        vehicles: vehicles.slice(0, 200).map(v => ({
+                            id: v.vehicleId,
+                            trip: v.tripId,
+                            route: v.routeId,
+                            lat: v.lat,
+                            lon: v.lon,
+                            bearing: v.bearing,
+                            speed: v.speed,
+                            delay: v.delaySeconds,
+                            occupancy: v.occupancyStatus,
+                            congestion: v.congestionLevel,
+                            status: v.status,
+                        })),
+                    } : {}),
+                };
+
+                res.write(`data: ${JSON.stringify(payload)}\n\n`);
+            } catch (err) {
+                // Silently skip errors — stream continues
+            }
+        };
+
+        // Initial push
+        send();
+
+        // Periodic pushes
+        const timer = setInterval(send, Math.max(pushInterval, 1000));
+
+        // Cleanup on disconnect
+        req.on('close', () => {
+            alive = false;
+            clearInterval(timer);
+        });
     });
 
     // ─── Vehicle Simulation ───
@@ -467,6 +543,8 @@ export function createApiRouter(
                 speed: v.speed,
                 status: v.status,
                 nextStopId: v.nextStopId,
+                occupancyStatus: v.occupancyStatus,
+                congestionLevel: v.congestionLevel,
             })),
         });
     });
@@ -474,6 +552,43 @@ export function createApiRouter(
     /** Get arrival logs (debug) */
     router.get('/arrivals', (_req: Request, res: Response) => {
         res.json(simulation.getArrivals());
+    });
+
+    /** Set simulation congestion (speed multiplier) for a route or trip */
+    router.post('/simulation/congestion', (req: Request, res: Response) => {
+        const { id, multiplier } = req.body;
+        if (!id || multiplier === undefined) {
+            res.status(400).json({ error: 'id and multiplier are required' });
+            return;
+        }
+        simulation.setCongestionPreset(id, parseFloat(multiplier));
+        res.json({ success: true, id, multiplier });
+    });
+
+    /** Clear all simulation congestion */
+    router.delete('/simulation/congestion', (_req: Request, res: Response) => {
+        simulation.clearCongestionPresets();
+        res.json({ success: true });
+    });
+
+    /** System health and metrics */
+    router.get('/health', (_req: Request, res: Response) => {
+        const feedMetrics = feedGenerator.getHealthMetrics();
+        const accuracyMetrics = simulation.getAccuracyMetrics();
+        res.json({
+            status: 'UP',
+            uptimeSeconds: Math.floor(process.uptime()),
+            memoryUsage: process.memoryUsage(),
+            feed: feedMetrics,
+            accuracy: accuracyMetrics,
+            system: {
+                routes: repo.getRouteCount(),
+                trips: repo.getTripCount(),
+                stops: repo.getStopCount(),
+                activeVehicles: simulation.getVehicleCount(),
+                activeDetours: detourStore.getActive().length,
+            }
+        });
     });
 
     /** System status */

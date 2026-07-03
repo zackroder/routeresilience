@@ -1,7 +1,7 @@
 import { GTFSRepository } from '../gtfs/database.js';
 import { DetourEngine, ModifiedTrip } from '../detour/engine.js';
 import { DetourStore } from '../detour/store.js';
-import { SimulationEngine } from '../simulation/engine.js';
+import { VehicleDataSource } from './vehicle-data-source.js';
 import { PredictionEngine, TripPrediction } from './predictions.js';
 import { encodeFeedMessage } from './proto.js';
 import { CancellationStore } from '../detour/cancellations.js';
@@ -13,11 +13,21 @@ export class FeedGenerator {
     private cacheTimestamp = 0;
     private static readonly CACHE_TTL_MS = 1_000;
 
+    // Metrics tracking
+    private lastEntityCount = 0;
+    private lastVehicleCount = 0;
+    private lastTripUpdateCount = 0;
+    private lastDetourCount = 0;
+    private lastGenerationTime = 0;
+
+    // Differential tracking
+    private lastEntityStates = new Map<string, string>(); // entityId -> stringified state
+
     constructor(
         private repo: GTFSRepository,
         private detourEngine: DetourEngine,
         private detourStore: DetourStore,
-        private simulation: SimulationEngine,
+        private vehicleSource: VehicleDataSource,
         private predictions: PredictionEngine,
         private cancellationStore: CancellationStore,
     ) { }
@@ -25,17 +35,20 @@ export class FeedGenerator {
     /**
      * Generate the full GTFS-RT feed as a binary protobuf buffer.
      */
-    async generateFeed(now: Date = new Date()): Promise<Buffer> {
-        if (this.cachedFeed && (Date.now() - this.cacheTimestamp) < FeedGenerator.CACHE_TTL_MS) {
+    async generateFeed(now: Date = new Date(), isDifferential = false): Promise<Buffer> {
+        // We only cache the full dataset. Differential updates are generated fresh.
+        if (!isDifferential && this.cachedFeed && (Date.now() - this.cacheTimestamp) < FeedGenerator.CACHE_TTL_MS) {
             return this.cachedFeed;
         }
 
-        const feedMessage = await this.buildFeedMessage(now);
+        const feedMessage = await this.buildFeedMessage(now, isDifferential);
         const buffer = await encodeFeedMessage(feedMessage);
 
-        this.cachedFeed = buffer;
-        this.cachedFeedJson = feedMessage;
-        this.cacheTimestamp = Date.now();
+        if (!isDifferential) {
+            this.cachedFeed = buffer;
+            this.cachedFeedJson = feedMessage;
+            this.cacheTimestamp = Date.now();
+        }
 
         return buffer;
     }
@@ -43,18 +56,17 @@ export class FeedGenerator {
     /**
      * Get the feed as a JSON object (for debugging).
      */
-    async generateFeedJson(now: Date = new Date()): Promise<any> {
-        if (this.cachedFeedJson && (Date.now() - this.cacheTimestamp) < FeedGenerator.CACHE_TTL_MS) {
+    async generateFeedJson(now: Date = new Date(), isDifferential = false): Promise<any> {
+        if (!isDifferential && this.cachedFeedJson && (Date.now() - this.cacheTimestamp) < FeedGenerator.CACHE_TTL_MS) {
             return this.cachedFeedJson;
         }
-        await this.generateFeed(now);
-        return this.cachedFeedJson;
+        return await this.buildFeedMessage(now, isDifferential);
     }
 
     /**
      * Build the complete GTFS-RT FeedMessage object.
      */
-    private async buildFeedMessage(now: Date): Promise<any> {
+    private async buildFeedMessage(now: Date, isDifferential = false): Promise<any> {
         const entities: any[] = [];
         const nowEpoch = Math.floor(now.getTime() / 1000);
         const dateStr = this.formatDateStr(now);
@@ -68,7 +80,7 @@ export class FeedGenerator {
         const activeDetours = this.detourStore.getActive(now);
 
         // ─── 1. Vehicle Position entities for ALL tracked vehicles ───
-        const vehicles = this.simulation.getVehicles();
+        const vehicles = this.vehicleSource.getVehicles();
         for (const vehicle of vehicles) {
             // Skip cancelled trips
             if (this.cancellationStore.isCancelled(vehicle.tripId)) continue;
@@ -80,6 +92,7 @@ export class FeedGenerator {
                         tripId: vehicle.tripId,
                         routeId: vehicle.routeId,
                         directionId: vehicle.directionId,
+                        startDate: dateStr,
                         scheduleRelationship: modifiedTrips.has(vehicle.tripId) ? 5 : 0, // REPLACEMENT or SCHEDULED
                     },
                     vehicle: {
@@ -95,6 +108,8 @@ export class FeedGenerator {
                     currentStopSequence: vehicle.currentStopIndex + 1,
                     stopId: vehicle.nextStopId,
                     currentStatus: vehicle.status === 'AT_STOP' ? 1 : 2, // STOPPED_AT or IN_TRANSIT_TO
+                    congestionLevel: vehicle.congestionLevel,
+                    occupancyStatus: vehicle.occupancyStatus,
                     timestamp: Math.floor(vehicle.lastUpdateTime / 1000),
                 },
             });
@@ -113,6 +128,7 @@ export class FeedGenerator {
                             tripId: trip.trip_id,
                             routeId: trip.route_id,
                             directionId: trip.direction_id,
+                            startDate: dateStr,
                             scheduleRelationship: 3, // CANCELED
                         },
                         timestamp: nowEpoch,
@@ -137,6 +153,7 @@ export class FeedGenerator {
                         tripId: trip.trip_id,
                         routeId: trip.route_id,
                         directionId: trip.direction_id,
+                        startDate: dateStr,
                         scheduleRelationship: 0, // SCHEDULED
                     },
                     stopTimeUpdate: prediction.predictions.map(p => ({
@@ -163,7 +180,12 @@ export class FeedGenerator {
                         tripId: tripId,
                         routeId: trip.route_id,
                         directionId: trip.direction_id,
+                        startDate: dateStr,
                         scheduleRelationship: 5, // REPLACEMENT
+                        modifiedTrip: {
+                            modificationsId: `tm_${modTrip.detourId}`,
+                            affectedTripId: tripId,
+                        }
                     },
                     stopTimeUpdate: modTrip.modifiedStopTimes.map(ms => ({
                         stopSequence: ms.stopSequence,
@@ -194,8 +216,8 @@ export class FeedGenerator {
                         shapeId: detourShapeId,
                     }],
                     modifications: [{
-                        startStopSelector: { stopId: detour.startStopId },
-                        endStopSelector: { stopId: detour.endStopId },
+                        ...(detour.startStopId ? { startStopSelector: { stopId: detour.startStopId } } : {}),
+                        ...(detour.endStopId ? { endStopSelector: { stopId: detour.endStopId } } : {}),
                         propagatedModificationDelay: 0,
                         replacementStops: detour.replacementStops.map(rs => ({
                             stopId: rs.stopId,
@@ -211,7 +233,7 @@ export class FeedGenerator {
                 id: `shape_${detour.id}`,
                 shape: {
                     shapeId: detourShapeId,
-                    encodedPolyline: encodePolyline(detour.detourShape),
+                    encodedPolyline: encodePolyline(detour.path || detour.detourShape),
                 },
             });
 
@@ -256,13 +278,53 @@ export class FeedGenerator {
             });
         }
 
-        return {
+        // Filter for differential updates if requested
+        let finalEntities = entities;
+        if (isDifferential) {
+            finalEntities = entities.filter(entity => {
+                const state = JSON.stringify(entity);
+                const lastState = this.lastEntityStates.get(entity.id);
+                if (state === lastState) return false;
+                this.lastEntityStates.set(entity.id, state);
+                return true;
+            });
+        } else {
+            // Update all states on full dataset generation
+            for (const entity of entities) {
+                this.lastEntityStates.set(entity.id, JSON.stringify(entity));
+            }
+        }
+
+        const feedMessage = {
             header: {
                 gtfsRealtimeVersion: '2.0',
-                incrementality: 0, // FULL_DATASET
+                incrementality: isDifferential ? 1 : 0, // DIFFERENTIAL or FULL_DATASET
                 timestamp: nowEpoch,
             },
-            entity: entities,
+            entity: finalEntities,
+        };
+
+        // Update metrics
+        this.lastGenerationTime = Date.now();
+        this.lastEntityCount = finalEntities.length;
+        this.lastVehicleCount = vehicles.length;
+        this.lastTripUpdateCount = finalEntities.filter(e => e.tripUpdate).length;
+        this.lastDetourCount = activeDetours.length;
+
+        return feedMessage;
+    }
+
+    /**
+     * Get health metrics for the feed generator.
+     */
+    getHealthMetrics() {
+        return {
+            lastGenerationTime: this.lastGenerationTime,
+            entityCount: this.lastEntityCount,
+            vehicleCount: this.lastVehicleCount,
+            tripUpdateCount: this.lastTripUpdateCount,
+            detourCount: this.lastDetourCount,
+            cacheAgeMs: Date.now() - this.cacheTimestamp,
         };
     }
 
