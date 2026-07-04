@@ -19,8 +19,6 @@ Ingests GTFS schedule and geographic data in conjunction with vehicle location f
 
 ## Screenshots
 
-*(Note: Add your actual screenshots to the `docs/` folder to populate these)*
-
 ### Map View
 ![Map View & Detour Planning](docs/map-view.png)
 *Visualizing a detour with temporary replacement stops and the OSRM-calculated path.*
