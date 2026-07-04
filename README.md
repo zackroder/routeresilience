@@ -21,13 +21,24 @@ Ingests GTFS schedule and geographic data in conjunction with vehicle location f
 
 *(Note: Add your actual screenshots to the `docs/` folder to populate these)*
 
-### Map View & Detour Planning
+### Map View
 ![Map View & Detour Planning](docs/map-view.png)
 *Visualizing a detour with temporary replacement stops and the OSRM-calculated path.*
 
+#### Intuitive Detour Planning ####
+![Detour Creation 1](docs/detour-creation-1.png)
+*Use snap-to-street tracing and auto-detect pre-existing stops along detour path*
+
+![Detour Creation 2](docs/detour-creation-2.png)
+*Configurable start and end date-times for detours, with RouteResilience automatically detecting route patterns and trips affected by detour.*
+
 ### Block Viewer (Gantt Chart)
 ![Block Viewer](docs/block-viewer.png)
-*Analyzing vehicle assignments and runs throughout the day.*
+*Analyzing runs throughout the day alongside cancelled/detoured trips.*
+
+### Block Viewer (Gantt Chart)
+![Cancelled Trip Viewer](docs/view-cancelled.png)
+*View and restore cancelled trips.*
 
 ## Technology Stack
 
@@ -37,10 +48,17 @@ Ingests GTFS schedule and geographic data in conjunction with vehicle location f
 - **Routing**: OSRM (Open Source Routing Machine) API
 - **Data Ingestion**: node-gtfs (Parses CTA static GTFS feeds)
 
-## Future Enhancements: GTFS-RT Ingestion
+## Future Enhancements
+
+### 1. GTFS-RT Ingestion & Middleware Proxy
 Currently, RouteResilience runs a high-performance, internal simulation engine to generate thousands of realistic vehicle positions based on the static schedule. 
 
 In a true production environment, the ultimate model is to configure RouteResilience as a **GTFS-RT Middleware Proxy**. Instead of simulating vehicles, the system will ingest the transit agency's raw, upstream GTFS-RT `VehiclePositions` feed. The application will correlate real buses to the static schedule, seamlessly overlay the user-created detours (`TripModifications`), and emit an enhanced, corrected GTFS-RT feed downstream to platforms like Google Maps and Apple Maps.
+
+### 2. Service Management & Headway Adherence
+As a GTFS-RT middleware proxy with real-time knowledge of bus locations and the static schedule, RouteResilience is perfectly positioned to monitor **schedule adherence and headways**. 
+
+Future updates will include an automated engine that continuously scans the live network to identify "bunched" or "gapped" buses. Following a set of configurable agency rules, the system will actively recommend service restoration interventions (such as holding a bus at a control point or expressing a bus to fill a gap) to improve headway reliability and keep the network flowing.
 
 ## Local Development Setup
 
