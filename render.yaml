@@ -12,4 +12,4 @@ services:
     disk:
       name: gtfs-data
       mountPath: /opt/render/project/src/data
-      sizeGB: 1
+      sizeGB: 4
