@@ -73,23 +73,20 @@ Future updates will include an automated engine that continuously scans the live
 4. **Access the Application**
    Open your browser and navigate to `http://localhost:5173`.
 
-## Deployment (Render / VPS)
+## Deployment (Fly.io)
 
-Because this application relies on a local SQLite database populated by a large GTFS download on startup, deploying to traditional serverless environments (like Vercel or Netlify) is not recommended. 
+Because this application relies on a local SQLite database populated by a large GTFS download on startup, deploying to traditional serverless environments is not recommended. 
 
-The easiest way to deploy this is using a standard VPS or a persistent service like **Render** or **Railway**.
+The easiest and cheapest way to deploy this is using **Fly.io**, which provides a persistent storage volume on their free tier. The repository is pre-configured with a `Dockerfile` and `fly.toml` specifically for this.
 
-### Build for Production
-To build the frontend client and compile the backend TypeScript:
-```bash
-npm run build
-```
+1. **Install Flyctl** (The Fly.io CLI tool)
+2. **Login or Sign Up**: `fly auth login`
+3. **Launch the App**: Run `fly launch` in the root directory.
+   - When asked to copy the existing `fly.toml` configuration, type **Yes**.
+   - When asked to tweak settings, you can accept the defaults.
+4. **Deploy**: Run `fly deploy`
 
-### Start Production Server
-```bash
-npm start
-```
-By default, the Express server will serve the static files from `dist/client` and expose the API on port `3001` (or your configured `PORT` environment variable).
+Fly.io will automatically provision the 3GB persistent volume mounted at `/app/data`, build the Docker container, and start your live server.
 
 ## API Endpoints
 
