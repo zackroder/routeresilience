@@ -1,11 +1,10 @@
-import { parse } from 'csv-parse/sync';
+import { parse } from 'csv-parse';
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import http from 'http';
 import AdmZip from 'adm-zip';
 import { GTFSRepository } from './database.js';
-import { Route, Trip, Stop, StopTime, ShapePoint, Calendar, CalendarDate } from './types.js';
 
 const CTA_GTFS_URL = 'https://www.transitchicago.com/downloads/sch_data/google_transit.zip';
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -48,27 +47,42 @@ function extractZip(zipPath: string, destDir: string): void {
     zip.extractAllTo(destDir, true);
 }
 
-// ─── Parse CSV ───
+// ─── Parse CSV Stream ───
 
-function parseCSV<T>(filePath: string): T[] {
-    if (!fs.existsSync(filePath)) {
-        console.warn(`GTFS file not found: ${filePath}`);
-        return [];
-    }
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const cleaned = content.charCodeAt(0) === 0xFEFF ? content.slice(1) : content;
-    return parse(cleaned, {
-        columns: true,
-        skip_empty_lines: true,
-        trim: true,
-        cast: false,
+function parseCSVStream(filePath: string, onRecord: (record: any) => void): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (!fs.existsSync(filePath)) {
+            console.warn(`GTFS file not found: ${filePath}`);
+            resolve();
+            return;
+        }
+        
+        const parser = parse({
+            columns: true,
+            skip_empty_lines: true,
+            trim: true,
+            cast: false,
+            bom: true
+        });
+
+        parser.on('readable', function() {
+            let record;
+            while ((record = parser.read()) !== null) {
+                onRecord(record);
+            }
+        });
+
+        parser.on('error', reject);
+        parser.on('end', resolve);
+        
+        fs.createReadStream(filePath).pipe(parser);
     });
 }
 
 // ─── Main Loader ───
 
 export async function loadGTFS(): Promise<GTFSRepository> {
-    // Download and Extract (keep existing logic)
+    // Download and Extract
     if (!fs.existsSync(GTFS_ZIP_PATH)) {
         console.log('Downloading CTA GTFS feed...');
         await downloadFile(CTA_GTFS_URL, GTFS_ZIP_PATH);
@@ -81,57 +95,66 @@ export async function loadGTFS(): Promise<GTFSRepository> {
         console.log('Extraction complete.');
     }
 
-    const repo = new GTFSRepository();
-    const db = repo.getDb();
+    let repo = new GTFSRepository();
+    let db = repo.getDb();
 
     // Check if DB is empty
     const routeCount = db.prepare('SELECT count(*) as count FROM routes').get() as { count: number };
-    if (routeCount.count > 0) {
+    const tripCount = db.prepare('SELECT count(*) as count FROM trips').get() as { count: number };
+    const stCountCheck = db.prepare('SELECT count(*) as count FROM stop_times').get() as { count: number };
+
+    if (routeCount.count > 0 && tripCount.count > 0 && stCountCheck.count > 0) {
         console.log('GTFS database already populated. skipping import.');
         return repo;
+    } else if (routeCount.count > 0 || tripCount.count > 0 || stCountCheck.count > 0) {
+        console.log('GTFS database is partially populated or corrupted. Rebuilding...');
+        repo.close();
+        repo = new GTFSRepository({ clear: true });
+        db = repo.getDb();
     }
 
     const gtfsPath = (file: string) => path.join(GTFS_EXTRACTED_DIR, file);
-    console.log('Importing GTFS data into SQLite...');
+    console.log('Importing GTFS data into SQLite using async streams...');
     const startTime = Date.now();
 
-    repo.transaction(() => {
+    db.exec('BEGIN TRANSACTION');
+
+    try {
         // 1. Routes
-        const rawRoutes = parseCSV<any>(gtfsPath('routes.txt'));
+        let routeCountInserted = 0;
+        const validRouteIds = new Set<string>();
         const insertRoute = db.prepare(`
             INSERT INTO routes (route_id, agency_id, route_short_name, route_long_name, route_type, route_color, route_text_color)
             VALUES (@route_id, @agency_id, @route_short_name, @route_long_name, @route_type, @route_color, @route_text_color)
         `);
 
-        // Filter to bus routes only (type 3)
-        const busRoutes = rawRoutes.filter((r: any) => parseInt(r.route_type) === 3);
-        for (const r of busRoutes) {
-            insertRoute.run({
-                route_id: r.route_id,
-                agency_id: r.agency_id || '',
-                route_short_name: r.route_short_name || '',
-                route_long_name: r.route_long_name || '',
-                route_type: 3,
-                route_color: r.route_color || '0000FF',
-                route_text_color: r.route_text_color || 'FFFFFF'
-            });
-        }
-        console.log(`Imported ${busRoutes.length} routes`);
+        await parseCSVStream(gtfsPath('routes.txt'), (r) => {
+            if (parseInt(r.route_type) === 3) {
+                validRouteIds.add(r.route_id);
+                insertRoute.run({
+                    route_id: r.route_id,
+                    agency_id: r.agency_id || '',
+                    route_short_name: r.route_short_name || '',
+                    route_long_name: r.route_long_name || '',
+                    route_type: 3,
+                    route_color: r.route_color || '0000FF',
+                    route_text_color: r.route_text_color || 'FFFFFF'
+                });
+                routeCountInserted++;
+            }
+        });
+        console.log(`Imported ${routeCountInserted} routes`);
 
-        // 2. Trips (first pass to get valid trip IDs)
-        const rawTrips = parseCSV<any>(gtfsPath('trips.txt'));
+        // 2. Trips
+        const validTripIds = new Set<string>();
+        const validShapeIds = new Set<string>();
         const insertTrip = db.prepare(`
             INSERT INTO trips (trip_id, route_id, service_id, direction_id, direction, trip_headsign, shape_id, block_id)
             VALUES (@trip_id, @route_id, @service_id, @direction_id, @direction, @trip_headsign, @shape_id, @block_id)
         `);
 
-        // Set of valid route IDs
-        const validRouteIds = new Set(busRoutes.map((r: any) => r.route_id));
-        const validTripIds = new Set<string>();
-        const validShapeIds = new Set<string>();
-
-        for (const t of rawTrips) {
-            if (!validRouteIds.has(t.route_id)) continue;
+        await parseCSVStream(gtfsPath('trips.txt'), (t) => {
+            if (!validRouteIds.has(t.route_id)) return;
             validTripIds.add(t.trip_id);
             if (t.shape_id) validShapeIds.add(t.shape_id);
 
@@ -145,19 +168,17 @@ export async function loadGTFS(): Promise<GTFSRepository> {
                 shape_id: t.shape_id || '',
                 block_id: t.block_id || ''
             });
-        }
+        });
         console.log(`Imported ${validTripIds.size} trips`);
 
         // 3. Stops
-        const rawStops = parseCSV<any>(gtfsPath('stops.txt'));
+        let stopCountInserted = 0;
         const insertStop = db.prepare(`
             INSERT INTO stops (stop_id, stop_name, stop_lat, stop_lon, stop_code, location_type, parent_station)
             VALUES (@stop_id, @stop_name, @stop_lat, @stop_lon, @stop_code, @location_type, @parent_station)
         `);
 
-        // Populate all stops (some unrelated stops might be imported, but safer than filtering which is hard without stop_times first)
-        // Optimization: We could filter stops by checking stop_times, but let's just import all for now.
-        for (const s of rawStops) {
+        await parseCSVStream(gtfsPath('stops.txt'), (s) => {
             insertStop.run({
                 stop_id: s.stop_id,
                 stop_name: s.stop_name || '',
@@ -167,26 +188,25 @@ export async function loadGTFS(): Promise<GTFSRepository> {
                 location_type: parseInt(s.location_type) || 0,
                 parent_station: s.parent_station || ''
             });
-        }
-        console.log(`Imported ${rawStops.length} stops`);
+            stopCountInserted++;
+        });
+        console.log(`Imported ${stopCountInserted} stops`);
 
         // 4. Stop Times
-        const rawStopTimes = parseCSV<any>(gtfsPath('stop_times.txt'));
+        let stCountInserted = 0;
         const insertStopTime = db.prepare(`
             INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence, pickup_type, drop_off_type, shape_dist_traveled)
             VALUES (@trip_id, @arrival_time, @departure_time, @stop_id, @stop_sequence, @pickup_type, @drop_off_type, @shape_dist_traveled)
         `);
 
-        // Helpers for time parsing (HH:MM:SS)
         const parseTime = (t: string) => {
             if (!t) return 0;
             const [h, m, s] = t.split(':').map(Number);
             return h * 3600 + m * 60 + s;
         };
 
-        let stCount = 0;
-        for (const st of rawStopTimes) {
-            if (!validTripIds.has(st.trip_id)) continue;
+        await parseCSVStream(gtfsPath('stop_times.txt'), (st) => {
+            if (!validTripIds.has(st.trip_id)) return;
 
             insertStopTime.run({
                 trip_id: st.trip_id,
@@ -198,20 +218,19 @@ export async function loadGTFS(): Promise<GTFSRepository> {
                 drop_off_type: parseInt(st.drop_off_type) || 0,
                 shape_dist_traveled: parseFloat(st.shape_dist_traveled) || 0
             });
-            stCount++;
-        }
-        console.log(`Imported ${stCount} stop times`);
+            stCountInserted++;
+        });
+        console.log(`Imported ${stCountInserted} stop times`);
 
         // 5. Shapes
-        const rawShapes = parseCSV<any>(gtfsPath('shapes.txt'));
+        let shapeCountInserted = 0;
         const insertShape = db.prepare(`
             INSERT INTO shapes (shape_id, shape_pt_lat, shape_pt_lon, shape_pt_sequence, shape_dist_traveled)
             VALUES (@shape_id, @shape_pt_lat, @shape_pt_lon, @shape_pt_sequence, @shape_dist_traveled)
         `);
 
-        let shapeCount = 0;
-        for (const sp of rawShapes) {
-            if (!validShapeIds.has(sp.shape_id)) continue;
+        await parseCSVStream(gtfsPath('shapes.txt'), (sp) => {
+            if (!validShapeIds.has(sp.shape_id)) return;
 
             insertShape.run({
                 shape_id: sp.shape_id,
@@ -220,17 +239,17 @@ export async function loadGTFS(): Promise<GTFSRepository> {
                 shape_pt_sequence: parseInt(sp.shape_pt_sequence),
                 shape_dist_traveled: parseFloat(sp.shape_dist_traveled) || 0
             });
-            shapeCount++;
-        }
-        console.log(`Imported ${shapeCount} shape points`);
+            shapeCountInserted++;
+        });
+        console.log(`Imported ${shapeCountInserted} shape points`);
 
         // 6. Calendar & Calendar Dates
-        const rawCalendar = parseCSV<any>(gtfsPath('calendar.txt'));
         const insertCalendar = db.prepare(`
             INSERT INTO calendar (service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date)
             VALUES (@service_id, @monday, @tuesday, @wednesday, @thursday, @friday, @saturday, @sunday, @start_date, @end_date)
         `);
-        for (const c of rawCalendar) {
+
+        await parseCSVStream(gtfsPath('calendar.txt'), (c) => {
             insertCalendar.run({
                 service_id: c.service_id,
                 monday: parseInt(c.monday),
@@ -243,24 +262,23 @@ export async function loadGTFS(): Promise<GTFSRepository> {
                 start_date: c.start_date,
                 end_date: c.end_date
             });
-        }
+        });
 
-        const rawCalendarDates = parseCSV<any>(gtfsPath('calendar_dates.txt'));
         const insertCalendarDate = db.prepare(`
             INSERT INTO calendar_dates (service_id, date, exception_type)
             VALUES (@service_id, @date, @exception_type)
         `);
-        for (const cd of rawCalendarDates) {
+
+        await parseCSVStream(gtfsPath('calendar_dates.txt'), (cd) => {
             insertCalendarDate.run({
                 service_id: cd.service_id,
                 date: cd.date,
                 exception_type: parseInt(cd.exception_type)
             });
-        }
+        });
         console.log('Imported calendars');
 
         // 7. Update Directions JSON in Routes
-        // Helper to infer directions (copied logic)
         console.log('Inferring route directions...');
         const routes = db.prepare('SELECT route_id FROM routes').all() as { route_id: string }[];
         const updateRoute = db.prepare('UPDATE routes SET directions = ? WHERE route_id = ?');
@@ -287,8 +305,7 @@ export async function loadGTFS(): Promise<GTFSRepository> {
             }
         }
 
-
-        // 8. Update Trip Start/End Times (for fast active trips query)
+        // 8. Update Trip Start/End Times
         console.log('Updating trip start/end times...');
         const updateTripTimes = db.prepare(`
             UPDATE trips 
@@ -301,7 +318,15 @@ export async function loadGTFS(): Promise<GTFSRepository> {
             WHERE trips.trip_id = bounds.trip_id
         `);
         updateTripTimes.run();
-    });
+
+        // COMMIT the huge transaction
+        db.exec('COMMIT');
+
+    } catch (err) {
+        db.exec('ROLLBACK');
+        console.error('Error during GTFS import, rolling back:', err);
+        throw err;
+    }
 
     console.log(`GTFS import complete in ${Date.now() - startTime}ms`);
     return repo;
