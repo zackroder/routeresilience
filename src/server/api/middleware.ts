@@ -49,6 +49,11 @@ export function apiKeyMiddleware(req: Request, res: Response, next: NextFunction
     if (process.env.SIMULATION_DEBUG_MODE === 'true' && !process.env.REQUIRE_API_KEY) {
         return next();
     }
+    
+    // Allow public access to status and health endpoints for debugging
+    if (req.path === '/status' || req.path === '/health') {
+        return next();
+    }
 
     const apiKey = req.header('X-API-Key');
     const validKeys = (process.env.API_KEYS || 'dev-key').split(',');
