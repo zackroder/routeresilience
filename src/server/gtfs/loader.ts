@@ -121,6 +121,11 @@ export async function loadGTFS(): Promise<GTFSRepository> {
     console.log('Importing GTFS data into SQLite using async streams...');
     const startTime = Date.now();
 
+    // Optimize SQLite for massive bulk inserts
+    db.pragma('synchronous = OFF');
+    db.pragma('temp_store = MEMORY');
+    db.pragma('cache_size = -64000'); // 64MB cache
+
     db.exec('BEGIN TRANSACTION');
 
     try {
@@ -325,6 +330,10 @@ export async function loadGTFS(): Promise<GTFSRepository> {
 
         // COMMIT the huge transaction
         db.exec('COMMIT');
+
+        // Restore safe pragmas
+        db.pragma('synchronous = NORMAL');
+        db.pragma('cache_size = -2000');
 
     } catch (err) {
         db.exec('ROLLBACK');
