@@ -99,7 +99,10 @@ export async function loadGTFS(): Promise<GTFSRepository> {
         console.log('Extraction complete.');
     }
 
-    let repo = new GTFSRepository();
+    const DB_PATH = path.resolve(process.cwd(), 'data', 'gtfs.db');
+    
+    // Open in readonly mode initially to prevent Docker overlayFS from copying the 700MB file on boot
+    let repo = new GTFSRepository({ readonly: fs.existsSync(DB_PATH) });
     let db = repo.getDb();
 
     // Check if DB is empty
@@ -110,10 +113,10 @@ export async function loadGTFS(): Promise<GTFSRepository> {
     if (routeCount.count > 0 && tripCount.count > 0 && stCountCheck.count > 0) {
         console.log('GTFS database already populated. skipping import.');
         return repo;
-    } else if (routeCount.count > 0 || tripCount.count > 0 || stCountCheck.count > 0) {
-        console.log('GTFS database is partially populated or corrupted. Rebuilding...');
+    } else {
+        console.log('GTFS database is empty or corrupted. Rebuilding...');
         repo.close();
-        repo = new GTFSRepository({ clear: true });
+        repo = new GTFSRepository({ clear: true, readonly: false });
         db = repo.getDb();
     }
 
