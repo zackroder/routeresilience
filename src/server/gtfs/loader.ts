@@ -105,12 +105,12 @@ export async function loadGTFS(): Promise<GTFSRepository> {
     let repo = new GTFSRepository({ readonly: fs.existsSync(DB_PATH) });
     let db = repo.getDb();
 
-    // Check if DB is empty
-    const routeCount = db.prepare('SELECT count(*) as count FROM routes').get() as { count: number };
-    const tripCount = db.prepare('SELECT count(*) as count FROM trips').get() as { count: number };
-    const stCountCheck = db.prepare('SELECT count(*) as count FROM stop_times').get() as { count: number };
+    // Check if DB is populated (O(1) instead of O(N) full table scan)
+    const routeCheck = db.prepare('SELECT 1 FROM routes LIMIT 1').get();
+    const tripCheck = db.prepare('SELECT 1 FROM trips LIMIT 1').get();
+    const stCheck = db.prepare('SELECT 1 FROM stop_times LIMIT 1').get();
 
-    if (routeCount.count > 0 && tripCount.count > 0 && stCountCheck.count > 0) {
+    if (routeCheck && tripCheck && stCheck) {
         console.log('GTFS database already populated. skipping import.');
         return repo;
     } else {
