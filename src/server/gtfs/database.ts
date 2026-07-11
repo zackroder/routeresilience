@@ -3,10 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { Route, Trip, Stop, StopTime, ShapePoint, Calendar, CalendarDate } from './types.js';
 
-const DATA_DIR = process.env.PERSISTENT_DATA_DIR 
-    ? path.resolve(process.env.PERSISTENT_DATA_DIR) 
-    : path.resolve(process.cwd(), 'data');
-const DB_PATH = path.join(DATA_DIR, 'gtfs.db');
+const DB_PATH = path.resolve(process.cwd(), 'data', 'gtfs.db');
 
 // Schema definition
 const SCHEMA = `

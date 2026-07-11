@@ -8,9 +8,7 @@ import { GTFSRepository } from './database.js';
 
 const CTA_GTFS_URL = 'https://www.transitchicago.com/downloads/sch_data/google_transit.zip';
 
-const DATA_DIR = process.env.PERSISTENT_DATA_DIR 
-    ? path.resolve(process.env.PERSISTENT_DATA_DIR) 
-    : path.resolve(process.cwd(), 'data');
+const DATA_DIR = path.resolve(process.cwd(), 'data');
 const GTFS_ZIP_PATH = path.join(DATA_DIR, 'google_transit.zip');
 const GTFS_EXTRACTED_DIR = path.join(DATA_DIR, 'gtfs');
 
