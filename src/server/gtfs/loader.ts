@@ -128,7 +128,7 @@ export async function loadGTFS(): Promise<GTFSRepository> {
     // Optimize SQLite for massive bulk inserts
     db.pragma('synchronous = OFF');
     db.pragma('temp_store = MEMORY');
-    db.pragma('cache_size = -64000'); // 64MB cache
+    db.pragma('cache_size = -8000'); // 8MB cache (constrained for 256MB VMs)
 
     db.exec('BEGIN TRANSACTION');
 
