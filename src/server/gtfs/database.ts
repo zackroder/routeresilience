@@ -29,6 +29,8 @@ const SCHEMA = `
         block_id TEXT,
         start_time INTEGER, -- computed from stop_times
         end_time INTEGER,   -- computed from stop_times
+        start_stop_id TEXT, -- computed from stop_times (first stop)
+        end_stop_id TEXT,   -- computed from stop_times (last stop)
         FOREIGN KEY(route_id) REFERENCES routes(route_id)
     );
     CREATE INDEX IF NOT EXISTS idx_trips_route_dir ON trips(route_id, direction_id);
