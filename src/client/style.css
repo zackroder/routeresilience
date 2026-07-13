@@ -1715,9 +1715,28 @@ body.light-theme .modal-overlay {
 .block-view-content {
   flex: 1;
   overflow: auto;
-  /* Handle both axes here */
   position: relative;
-  /* background: var(--bg-primary); */
+}
+
+/* Sleek modern scrollbars for the block chart */
+.block-view-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.block-view-content::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+  border-radius: 5px;
+}
+.block-view-content::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 5px;
+  border: 2px solid var(--bg-primary);
+}
+.block-view-content::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-muted);
+}
+.block-view-content::-webkit-scrollbar-corner {
+  background: var(--bg-primary);
 }
 
 /* Timeline Grid */
@@ -1937,6 +1956,11 @@ body.light-theme .block-label.all-selected {
   border: 1px solid var(--accent-red);
   color: var(--text-muted);
   text-decoration: line-through;
+}
+
+.trip-bar.completed {
+  opacity: 0.4;
+  filter: grayscale(80%);
 }
 
 /* Popover for Trip Actions */
