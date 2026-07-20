@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import { createServer } from 'http';
 import { loadGTFS } from './gtfs/loader.js';
 import { createApiRouter } from './api/routes.js';
@@ -47,6 +48,14 @@ async function main() {
 
     const apiRouter = createApiRouter(repo, detourEngine, detourStore, simulation, feedGenerator, cancellationStore);
     app.use('/api', apiRouter);
+
+    // Serve static frontend files in production
+    const clientPath = path.resolve(process.cwd(), 'dist', 'client');
+    app.use(express.static(clientPath));
+
+    app.get('*', (req, res) => {
+        res.sendFile(path.join(clientPath, 'index.html'));
+    });
 
     const httpServer = createServer(app);
     httpServer.listen(PORT, '0.0.0.0', () => {
