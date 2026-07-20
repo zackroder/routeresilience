@@ -9,7 +9,8 @@ import path from 'path';
 export class DetourStore {
     private detours: Map<string, Detour> = new Map();
 
-    private readonly storePath = path.resolve(process.cwd(), 'data', 'detours.json');
+    private readonly storeDir = process.env.PERSISTENT_DATA_DIR || path.resolve(process.cwd(), 'data');
+    private readonly storePath = path.join(this.storeDir, 'detours.json');
 
     constructor() {
         this.load();
@@ -32,6 +33,9 @@ export class DetourStore {
 
     private save(): void {
         try {
+            if (!fs.existsSync(this.storeDir)) {
+                fs.mkdirSync(this.storeDir, { recursive: true });
+            }
             const data = JSON.stringify(this.getAll(), null, 2);
             fs.writeFileSync(this.storePath, data, 'utf-8');
         } catch (e) {

@@ -7,7 +7,8 @@ import path from 'path';
  */
 export class CancellationStore {
     private cancelledTripIds: Set<string> = new Set();
-    private readonly storePath = path.resolve(process.cwd(), 'data', 'cancellations.json');
+    private readonly storeDir = process.env.PERSISTENT_DATA_DIR || path.resolve(process.cwd(), 'data');
+    private readonly storePath = path.join(this.storeDir, 'cancellations.json');
 
     constructor() {
         this.load();
@@ -28,6 +29,9 @@ export class CancellationStore {
 
     private save(): void {
         try {
+            if (!fs.existsSync(this.storeDir)) {
+                fs.mkdirSync(this.storeDir, { recursive: true });
+            }
             const data = JSON.stringify(this.getAllCancelled(), null, 2);
             fs.writeFileSync(this.storePath, data, 'utf-8');
         } catch (e) {

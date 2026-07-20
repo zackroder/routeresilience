@@ -10,5 +10,8 @@ RUN npm install
 COPY . .
 RUN npm run build
 
+# Pre-build GTFS database into the image
+RUN npx tsx scripts/build-gtfs.ts
+
 EXPOSE 3000
 CMD ["npm", "start"]
