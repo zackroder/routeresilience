@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import http from 'http';
-import AdmZip from 'adm-zip';
+import unzipper from 'unzipper';
 import { GTFSRepository } from './database.js';
 
 const CTA_GTFS_URL = 'https://www.transitchicago.com/downloads/sch_data/google_transit.zip';
@@ -41,10 +41,11 @@ function downloadFile(url: string, dest: string): Promise<void> {
 
 // ─── Extract ───
 
-function extractZip(zipPath: string, destDir: string): void {
+async function extractZip(zipPath: string, destDir: string): Promise<void> {
     fs.mkdirSync(destDir, { recursive: true });
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(destDir, true);
+    await fs.createReadStream(zipPath)
+        .pipe(unzipper.Extract({ path: destDir }))
+        .promise();
 }
 
 // ─── Parse CSV Stream ───
@@ -89,9 +90,12 @@ export async function loadGTFS(): Promise<GTFSRepository> {
         console.log('Download complete.');
     }
 
-    if (!fs.existsSync(GTFS_EXTRACTED_DIR) || !fs.existsSync(path.join(GTFS_EXTRACTED_DIR, 'routes.txt'))) {
+    const requiredFiles = ['routes.txt', 'trips.txt', 'stops.txt', 'stop_times.txt', 'shapes.txt', 'calendar.txt'];
+    const missingFiles = requiredFiles.some(f => !fs.existsSync(path.join(GTFS_EXTRACTED_DIR, f)));
+
+    if (!fs.existsSync(GTFS_EXTRACTED_DIR) || missingFiles) {
         console.log('Extracting GTFS feed...');
-        extractZip(GTFS_ZIP_PATH, GTFS_EXTRACTED_DIR);
+        await extractZip(GTFS_ZIP_PATH, GTFS_EXTRACTED_DIR);
         console.log('Extraction complete.');
     }
 
