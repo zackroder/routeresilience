@@ -26,7 +26,8 @@ export class SimulationEngine implements VehicleDataSource {
     private vehicles: Map<string, VehicleState> = new Map();
     private vehiclesByTripId: Map<string, string> = new Map(); // tripId → vehicleId
     private interpolatedShapes: Map<string, InterpolatedShapePoint[]> = new Map();
-    private detourShapes: Map<string, InterpolatedShapePoint[]> = new Map(); // detourId → stitched shape
+    private detourShapes: Map<string, InterpolatedShapePoint[]> = new Map();
+    private stopShapeDistanceCache: Map<string, number> = new Map(); // key: shapeId_stopId // detourId → stitched shape
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private vehicleCounter = 0;
     private tickCounter = 0;
@@ -125,6 +126,7 @@ export class SimulationEngine implements VehicleDataSource {
      *   - segmentDistances[i] = cumulative distance along shape to stop i
      */
     private computeSegmentSpeeds(
+        shapeId: string,
         stopTimes: { stop_id: string; arrival_time: number; departure_time: number }[],
         shape: InterpolatedShapePoint[],
         speedFactor: number,
@@ -133,23 +135,29 @@ export class SimulationEngine implements VehicleDataSource {
         const segmentDistances: number[] = [];
 
         for (const st of stopTimes) {
-            const stop = this.repo.getStop(st.stop_id);
-            if (!stop) {
-                // Fallback: distribute evenly
-                const fraction = segmentDistances.length / Math.max(stopTimes.length - 1, 1);
-                segmentDistances.push(fraction * shape[shape.length - 1].distance);
-                continue;
-            }
+            const cacheKey = `${shapeId}_${st.stop_id}`;
+            let bestShapeDist = this.stopShapeDistanceCache.get(cacheKey);
 
-            // Find nearest shape point to this stop
-            let bestDist = Infinity;
-            let bestShapeDist = 0;
-            for (const sp of shape) {
-                const d = haversineMeters(stop.stop_lat, stop.stop_lon, sp.lat, sp.lon);
-                if (d < bestDist) {
-                    bestDist = d;
-                    bestShapeDist = sp.distance;
+            if (bestShapeDist === undefined) {
+                const stop = this.repo.getStop(st.stop_id);
+                if (!stop) {
+                    // Fallback: distribute evenly
+                    const fraction = segmentDistances.length / Math.max(stopTimes.length - 1, 1);
+                    segmentDistances.push(fraction * shape[shape.length - 1].distance);
+                    continue;
                 }
+
+                // Find nearest shape point to this stop
+                let bestDist = Infinity;
+                bestShapeDist = 0;
+                for (const sp of shape) {
+                    const d = haversineMeters(stop.stop_lat, stop.stop_lon, sp.lat, sp.lon);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bestShapeDist = sp.distance;
+                    }
+                }
+                this.stopShapeDistanceCache.set(cacheKey, bestShapeDist);
             }
             segmentDistances.push(bestShapeDist);
         }
@@ -376,7 +384,7 @@ export class SimulationEngine implements VehicleDataSource {
                 ? this.generateSpeedFactor()
                 : 1.0;
 
-            const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(stopTimes, shape, speedFactor);
+            const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(trip.shape_id, stopTimes, shape, speedFactor);
 
             // Calculate base speed from schedule (for diagnostics)
             const totalTripDuration = lastArrival - firstDeparture;
@@ -474,7 +482,7 @@ export class SimulationEngine implements VehicleDataSource {
             ? this.generateSpeedFactor()
             : 1.0;
 
-        const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(stopTimes, shape, speedFactor);
+        const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(trip.shape_id, stopTimes, shape, speedFactor);
         const initialSpeed = this.getSegmentSpeedAtDistance(distanceTraveled, segmentSpeeds, segmentDistances);
 
         const totalDuration = stopTimes[stopTimes.length - 1].arrival_time - firstDeparture;
