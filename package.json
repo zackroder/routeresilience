@@ -6,7 +6,8 @@
         "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
         "dev:server": "tsx watch src/server/index.ts",
         "dev:client": "vite src/client --config vite.config.ts",
-        "build": "vite build src/client --config vite.config.ts && tsc --noEmit"
+        "build": "vite build src/client --config vite.config.ts && tsc --noEmit",
+        "start": "tsx src/server/index.ts"
     },
     "dependencies": {
         "adm-zip": "^0.5.10",
