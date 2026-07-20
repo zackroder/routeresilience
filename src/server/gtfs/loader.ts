@@ -7,7 +7,10 @@ import unzipper from 'unzipper';
 import { GTFSRepository } from './database.js';
 
 const CTA_GTFS_URL = 'https://www.transitchicago.com/downloads/sch_data/google_transit.zip';
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+
+const DATA_DIR = process.env.PERSISTENT_DATA_DIR 
+    ? path.resolve(process.env.PERSISTENT_DATA_DIR) 
+    : path.resolve(process.cwd(), 'data');
 const GTFS_ZIP_PATH = path.join(DATA_DIR, 'google_transit.zip');
 const GTFS_EXTRACTED_DIR = path.join(DATA_DIR, 'gtfs');
 
@@ -99,7 +102,7 @@ export async function loadGTFS(): Promise<GTFSRepository> {
         console.log('Extraction complete.');
     }
 
-    const DB_PATH = path.resolve(process.cwd(), 'data', 'gtfs.db');
+    const DB_PATH = path.join(DATA_DIR, 'gtfs.db');
     
     // Open in readonly mode initially to prevent Docker overlayFS from copying the 700MB file on boot
     let repo = new GTFSRepository({ readonly: fs.existsSync(DB_PATH) });
