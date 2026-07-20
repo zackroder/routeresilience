@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: transit-detour-manager
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+    disk:
+      name: gtfs-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

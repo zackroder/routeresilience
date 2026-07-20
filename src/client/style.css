@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   Transit Detour Manager — Design System
+   RouteResilience — Design System
    Dark theme with CTA-inspired blue/red accents
    ═══════════════════════════════════════════════════════════════ */
 
@@ -926,9 +926,13 @@ h3 {
   height: 100%;
 }
 
-/* Override Leaflet dark theme */
-.leaflet-container {
-  background: var(--bg-primary) !important;
+/* Override Leaflet map background to blend with tiles and avoid grid lines from gaps */
+.light-theme .leaflet-container {
+  background: #d4dadc !important; /* Carto light map base color */
+}
+
+.dark-theme .leaflet-container {
+  background: #242430 !important; /* Carto dark map base color */
 }
 
 .leaflet-control-zoom {
