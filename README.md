@@ -12,6 +12,7 @@ Ingests GTFS schedule and geographic data in conjunction with vehicle location f
 - **Detour Creation Workflow**: Intuitive point-and-click interface to define diverge/rejoin stops, featuring an automatic **snap-to-street** routing workflow that calculates temporary paths using OSRM.
 - **Block Viewer (Run Management)**: Visualize bus blocks/runs on a Gantt-style timeline to understand vehicle assignments, with the ability to dynamically **cancel specific trips, entire blocks, or runs**.
 - **Cancelled Trip Tracking**: Manage and visualize cancelled trips with impact analysis against the schedule.
+- **Advanced GTFS Processing**: Automatically detects, groups, and maps all unique trip patterns and route variants within the schedule data.
 - **GTFS-RT Middleware Proxy**: Automatically generates a live, valid protobuf GTFS-RT feed (`/api/gtfs-rt`) containing `VehiclePositions`, `TripUpdates` (predictions), and experimental `TripModifications` to broadcast detours downstream to riders.
 - **Dynamic Routing**: Automatic map route updates utilizing OSRM to find the most logical temporary path between two transit stops.
 - **Dark/Light Mode**: Fully responsive, accessible interface with theming support for day/night operations.
