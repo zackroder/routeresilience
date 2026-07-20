@@ -11,7 +11,7 @@ import { FeedGenerator } from './realtime/feed.js';
 import { PredictionEngine } from './realtime/predictions.js';
 import { apiKeyMiddleware, rateLimitMiddleware } from './api/middleware.js';
 
-const PORT = 4000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4000;
 
 async function main() {
     console.log('// ─── RouteResilience Server ───\n');
@@ -49,7 +49,7 @@ async function main() {
     app.use('/api', apiRouter);
 
     const httpServer = createServer(app);
-    httpServer.listen(PORT, () => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`\n✅ Server ready at http://localhost:${PORT}`);
         console.log(`   - API: http://localhost:${PORT}/api`);
         console.log(`   - GTFS-RT: http://localhost:${PORT}/api/gtfs-rt`);
