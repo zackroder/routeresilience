@@ -11,7 +11,7 @@ export class FeedGenerator {
     private cachedFeed: Buffer | null = null;
     private cachedFeedJson: any = null;
     private cacheTimestamp = 0;
-    private static readonly CACHE_TTL_MS = 1_000;
+    private static readonly CACHE_TTL_MS = 15_000;
 
     // Metrics tracking
     private lastEntityCount = 0;
