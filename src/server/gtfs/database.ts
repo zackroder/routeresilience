@@ -130,10 +130,6 @@ export class GTFSRepository {
         return this.db;
     }
 
-    close(): void {
-        this.db.close();
-    }
-
     // ─── Data Access Methods ───
 
     getAllRoutes(): Route[] {
