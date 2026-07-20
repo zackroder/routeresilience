@@ -97,7 +97,7 @@ const SCHEMA = `
 export class GTFSRepository {
     private db: Database.Database;
 
-    constructor(options: { clear?: boolean } = {}) {
+    constructor(options: { clear?: boolean, readonly?: boolean } = {}) {
         const dataDir = path.dirname(DB_PATH);
         if (!fs.existsSync(dataDir)) {
             fs.mkdirSync(dataDir, { recursive: true });
@@ -112,9 +112,12 @@ export class GTFSRepository {
             }
         }
 
-        this.db = new Database(DB_PATH);
-        this.db.pragma('journal_mode = WAL');
-        this.db.exec(SCHEMA);
+        this.db = new Database(DB_PATH, { readonly: options.readonly || false });
+        
+        if (!options.readonly) {
+            this.db.pragma('journal_mode = WAL');
+            this.db.exec(SCHEMA);
+        }
     }
 
     // ─── Transaction Helper ───
@@ -125,6 +128,10 @@ export class GTFSRepository {
 
     getDb(): Database.Database {
         return this.db;
+    }
+
+    close(): void {
+        this.db.close();
     }
 
     // ─── Data Access Methods ───
