@@ -705,6 +705,11 @@ export class SimulationEngine implements VehicleDataSource {
             this.respawnVehicle(id, now);
         }
 
+        // Every 300 ticks (~5 min), refresh active trips schedule for current time of day
+        if (this.tickCounter % 300 === 0) {
+            this.spawnActiveVehicles(nowDate);
+        }
+
         // Every 30 ticks (~30s), check if we need to spawn more to maintain target
         if (this.tickCounter % 30 === 0 && this.vehicles.size < this.targetVehicleCount) {
             const deficit = this.targetVehicleCount - this.vehicles.size;
