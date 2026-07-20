@@ -34,7 +34,7 @@ Ingests GTFS schedule and geographic data in conjunction with vehicle location f
 ![Block Viewer](docs/block-viewer.png)
 *Analyzing runs throughout the day alongside cancelled/detoured trips.*
 
-### Block Viewer (Gantt Chart)
+### Cancelled Trip View
 ![Cancelled Trip Viewer](docs/view-cancelled.png)
 *View and restore cancelled trips.*
 
