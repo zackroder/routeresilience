@@ -1872,7 +1872,6 @@ async function pollStatus() {
 let selectedCancelledIds = new Set<string>();
 
 async function loadCancelledTrips() {
-    selectedCancelledIds.clear();
     try {
         const cancellations = await api.getCancellations();
         const container = document.getElementById('cancelled-trips-list');
