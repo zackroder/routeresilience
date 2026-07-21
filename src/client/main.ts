@@ -2005,7 +2005,7 @@ function renderCancelledList(items: any[]) {
                                 </div>
                             </div>
                             <button class="btn btn-secondary btn-sm btn-restore-single" data-unique-ids="${uniqueIdsStr}"
-                                style="flex-shrink:0;align-self:center">Restore</button>
+                                style="flex-shrink:0;align-self:center" ${allPassed ? 'disabled' : ''}>Restore</button>
                         </div>
                     </div>`;
         });
@@ -2076,13 +2076,17 @@ function renderCancelledActionBar() {
     if (!slot) return;
     const count = selectedCancelledIds.size;
     if (count === 0) { slot.innerHTML = ''; return; }
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const hasFuture = Array.from(selectedCancelledIds).some(uid => uid.split('_')[1] >= todayStr);
+    const disabledAttr = hasFuture ? '' : 'disabled';
+
     slot.innerHTML = `
     <div class="block-action-bar">
         <span class="block-action-info">
             <strong>${count}</strong> trip${count !== 1 ? 's' : ''} selected
         </span>
         <div style="display:flex;gap:8px">
-            <button class="btn btn-secondary btn-sm" id="btn-restore-selected">Restore ${count}</button>
+            <button class="btn btn-secondary btn-sm" id="btn-restore-selected" ${disabledAttr}>Restore ${count}</button>
             <button class="btn btn-outline btn-sm" id="btn-clear-cancelled-sel">Clear</button>
         </div>
     </div>`;
@@ -2098,67 +2102,40 @@ function renderCancelledActionBar() {
 function doRestoreTrips(ids: string[]) {
     if (ids.length === 0) return;
 
-    let minDate = ids[0].split('_')[1];
-    let maxDate = ids[0].split('_')[1];
-
-    ids.forEach(uid => {
-        const d = uid.split('_')[1];
-        if (d < minDate) minDate = d;
-        if (d > maxDate) maxDate = d;
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    
+    // Filter out passed dates
+    const futureIds = ids.filter(uid => {
+        const date = uid.split('_')[1];
+        return date >= todayStr;
     });
 
-    // Convert YYYYMMDD to YYYY-MM-DD
-    const formatInputDate = (d: string) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
-    const defaultStart = formatInputDate(minDate);
-    const defaultEnd = formatInputDate(maxDate);
+    if (futureIds.length === 0) {
+        showAlert('All selected cancellations are in the past and cannot be restored.');
+        return;
+    }
 
-    const countStr = ids.length === 1 ? 'Restore 1 Trip' : `Restore Selected`;
-
-    const htmlMessage = `
-        <div style="margin-bottom: 16px; font-size: 14px; color: var(--text-secondary); text-align: center;">
-            Specify the date range to restore:
-        </div>
-        <div style="display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.03); border-radius: 12px; padding: 4px; border: 1px solid var(--border-subtle); margin: 0 auto 12px auto; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
-            <div style="display: flex; flex-direction: column; flex: 1; padding: 6px 12px;">
-                <label style="font-size:10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; color:var(--text-secondary); margin-bottom:2px;">Start Date</label>
-                <input type="date" id="restore-start-date" value="${defaultStart}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
-            </div>
-            <div style="width: 1px; height: 32px; background: var(--border-subtle); margin: 0 4px;"></div>
-            <div style="display: flex; flex-direction: column; flex: 1; padding: 6px 12px;">
-                <label style="font-size:10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; color:var(--text-secondary); margin-bottom:2px;">End Date</label>
-                <input type="date" id="restore-end-date" value="${defaultEnd}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
-            </div>
-        </div>
-    `;
+    const countStr = futureIds.length === 1 ? 'Restore 1 Trip' : `Restore ${futureIds.length} Trips`;
+    const passedStr = (ids.length - futureIds.length > 0) ? `<br><small style="color:var(--text-secondary);">(Skipped ${ids.length - futureIds.length} passed trips)</small>` : '';
 
     showModal({
         title: 'Restore Trips',
-        message: htmlMessage,
+        message: `<div style="text-align:center;">Are you sure you want to restore these trips?${passedStr}</div>`,
         type: 'info',
         confirmText: countStr,
         cancelText: 'Abort',
         onConfirm: async () => {
-            const startVal = (document.getElementById('restore-start-date') as HTMLInputElement).value.replace(/-/g, '');
-            const endVal = (document.getElementById('restore-end-date') as HTMLInputElement).value.replace(/-/g, '');
-
-            if (!startVal || !endVal || startVal > endVal) {
-                showAlert('Invalid date range selected.');
-                return;
-            }
-
-            // Filter ids to only those within the selected date range
-            const filteredIds = ids.filter(uid => {
-                const date = uid.split('_')[1];
-                return date >= startVal && date <= endVal;
-            });
-
-            if (filteredIds.length === 0) {
-                showAlert('No selected trips fall within that date range.');
-                return;
-            }
-
             try {
-                await api.restoreTripsBulk(filteredIds);
+                await api.restoreTripsBulk(futureIds);
+                
+                showModal({
+                    title: 'Success',
+                    message: `<div style="text-align:center;">Successfully restored <strong>${futureIds.length} trips</strong>!</div>`,
+                    type: 'success',
+                    confirmText: 'OK',
+                    cancelText: ''
+                });
+
                 selectedCancelledIds.clear();
                 await loadCancelledTrips();
                 if (activeView === 'blocks') loadBlockView();
@@ -2771,8 +2748,40 @@ async function cancelSelectedTrips() {
         return;
     }
 
+    // Compute how many full blocks are selected
+    let fullBlocksCount = 0;
+    let remainingTripsCount = 0;
+
+    for (const b of cachedBlocks) {
+        const cancellableTrips = b.trips.filter(t => {
+            if (t.is_cancelled) return false;
+            return selectedDateStr > todayStr || (selectedDateStr === todayStr && parseTime(t.end_time) > nowSec);
+        });
+
+        if (cancellableTrips.length === 0) continue;
+
+        const selectedInBlock = cancellableTrips.filter(t => toCancel.includes(t.trip_id));
+        if (selectedInBlock.length === 0) continue;
+
+        if (selectedInBlock.length === cancellableTrips.length) {
+            fullBlocksCount++;
+        } else {
+            remainingTripsCount += selectedInBlock.length;
+        }
+    }
+
+    let summaryLabel = '';
+    if (fullBlocksCount > 0) {
+        summaryLabel += `${fullBlocksCount} Block${fullBlocksCount > 1 ? 's' : ''}`;
+        if (remainingTripsCount > 0) {
+            summaryLabel += ` and ${remainingTripsCount} Trip${remainingTripsCount > 1 ? 's' : ''}`;
+        }
+    } else {
+        summaryLabel += `${remainingTripsCount} Trip${remainingTripsCount !== 1 ? 's' : ''}`;
+    }
+
     const defaultDate = (document.getElementById('block-view-date') as HTMLInputElement).value;
-    const countStr = toCancel.length === 1 ? 'Cancel 1 Trip' : `Cancel ${toCancel.length} Trips`;
+    const countStr = `Cancel ${summaryLabel}`;
     
     const htmlMessage = `
         <div style="margin-bottom: 16px; font-size: 14px; color: var(--text-secondary); text-align: center;">
@@ -2810,6 +2819,18 @@ async function cancelSelectedTrips() {
                 // Execute cancellations in bulk
                 const payloads = toCancel.map(id => ({ tripId: id, startDate: startVal, endDate: endVal }));
                 await api.cancelTripsBulk(payloads);
+                
+                // Show success modal
+                const startFormatted = `${startVal.slice(4,6)}/${startVal.slice(6,8)}/${startVal.slice(0,4)}`;
+                const endFormatted = `${endVal.slice(4,6)}/${endVal.slice(6,8)}/${endVal.slice(0,4)}`;
+                const dateStr = startFormatted === endFormatted ? startFormatted : `${startFormatted} - ${endFormatted}`;
+                showModal({
+                    title: 'Success',
+                    message: `<div style="text-align:center;">Successfully cancelled <strong>${summaryLabel}</strong><br>for dates: ${dateStr}</div>`,
+                    type: 'success',
+                    confirmText: 'OK',
+                    cancelText: '' // Hide cancel button
+                });
                 
                 // Update local cache so the chart re-renders correctly if the cancellation applies to the current view
                 if (startVal <= selectedDateStr && selectedDateStr <= endVal) {
