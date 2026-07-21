@@ -165,6 +165,26 @@ export function createApiRouter(
         res.json({ success: true, trip_id: req.params.id, status: 'RESTORED' });
     });
 
+    /** Bulk cancel trips */
+    router.post('/trips/cancel-bulk', (req: Request, res: Response) => {
+        const { payloads } = req.body;
+        if (!Array.isArray(payloads)) {
+            return res.status(400).json({ error: 'payloads array required' });
+        }
+        cancellationStore.bulkCancelTrips(payloads);
+        res.json({ success: true, status: 'BULK_CANCELED' });
+    });
+
+    /** Bulk restore trips */
+    router.post('/trips/restore-bulk', (req: Request, res: Response) => {
+        const { keys } = req.body;
+        if (!Array.isArray(keys)) {
+            return res.status(400).json({ error: 'keys array required' });
+        }
+        cancellationStore.bulkRestoreTrips(keys);
+        res.json({ success: true, status: 'BULK_RESTORED' });
+    });
+
     /** List all bus routes */
     router.get('/routes', (_req: Request, res: Response) => {
         const routes = repo.getAllRoutes().map(r => ({

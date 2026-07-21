@@ -139,7 +139,25 @@ export const api = {
         });
         if (!res.ok) throw new Error(`API error: ${res.status}`);
         return res.json();
-    }
+    },
+    cancelTripsBulk: async (payloads: {tripId: string, startDate: string, endDate: string}[]) => {
+        const res = await fetch(`${API_BASE}/trips/cancel-bulk`, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify({ payloads })
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
+    restoreTripsBulk: async (keys: string[]) => {
+        const res = await fetch(`${API_BASE}/trips/restore-bulk`, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify({ keys })
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
 };
 
 export interface BlockData {

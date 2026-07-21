@@ -85,12 +85,57 @@ export class CancellationStore {
         this.save();
     }
 
-    /**
-     * Restore a cancelled trip for a specific date.
-     */
     restoreTrip(tripId: string, targetDate: string): void {
         const key = `${tripId}_${targetDate}`;
         if (this.cancelledTripIds.delete(key)) {
+            this.save();
+        }
+    }
+
+    /**
+     * Mark multiple trips as cancelled for specific date ranges in a single operation.
+     */
+    bulkCancelTrips(payloads: {tripId: string, startDate: string, endDate: string}[]): void {
+        let changed = false;
+        for (const payload of payloads) {
+            const start = this.parseYYYYMMDD(payload.startDate);
+            const end = this.parseYYYYMMDD(payload.endDate);
+            
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                console.error(`Invalid dates for cancelTrip in bulk: ${payload.startDate} - ${payload.endDate}`);
+                continue;
+            }
+
+            let current = start;
+            while (current <= end) {
+                const dateStr = this.formatYYYYMMDD(current);
+                const key = `${payload.tripId}_${dateStr}`;
+                if (!this.cancelledTripIds.has(key)) {
+                    this.cancelledTripIds.add(key);
+                    changed = true;
+                }
+                current.setDate(current.getDate() + 1);
+            }
+        }
+        
+        if (changed) {
+            this.save();
+        }
+    }
+
+    /**
+     * Restore multiple trips in a single operation.
+     * @param keys Array of tripId_YYYYMMDD strings
+     */
+    bulkRestoreTrips(keys: string[]): void {
+        let changed = false;
+        for (const key of keys) {
+            if (this.cancelledTripIds.delete(key)) {
+                changed = true;
+            }
+        }
+        
+        if (changed) {
             this.save();
         }
     }
