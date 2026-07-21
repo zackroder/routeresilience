@@ -2852,9 +2852,15 @@ function showTripPopover(tripElem: HTMLElement, tripId: string) {
                 </span>
             </p>
             <div class="trip-popover-actions">
-                ${(!trip.is_cancelled && parseTime(trip.end_time) > getNowSeconds())
-            ? `<button class="btn btn-danger btn-sm" id="btn-cancel-trip">Cancel</button>`
-            : ''}
+                ${(() => {
+                    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                    const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+                    const isPassed = selectedDateStr < todayStr || (selectedDateStr === todayStr && parseTime(trip.end_time) <= getNowSeconds());
+                    if (!trip.is_cancelled && !isPassed) {
+                        return `<button class="btn btn-danger btn-sm" id="btn-cancel-trip">Cancel</button>`;
+                    }
+                    return '';
+                })()}
                 ${trip.is_cancelled
             ? `<button class="btn btn-secondary btn-sm" id="btn-restore-trip">Restore</button>`
             : ''}
@@ -2884,7 +2890,8 @@ function showTripPopover(tripElem: HTMLElement, tripId: string) {
         btnCancel.addEventListener('click', async () => {
             showConfirm('Are you sure you want to CANCEL this trip?', async () => {
                 try {
-                    await api.cancelTrip(tripId);
+                    const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+                    await api.cancelTrip(tripId, selectedDateStr, selectedDateStr);
                     trip!.is_cancelled = true;
                     popover.remove();
                     renderBlockViewchart();
@@ -2898,7 +2905,8 @@ function showTripPopover(tripElem: HTMLElement, tripId: string) {
         btnRestore.addEventListener('click', async () => {
             showConfirm('Restore this trip? The cancellation will be removed.', async () => {
                 try {
-                    await api.restoreTrip(tripId);
+                    const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+                    await api.restoreTrip(tripId, selectedDateStr);
                     trip!.is_cancelled = false;
                     popover.remove();
                     renderBlockViewchart();
