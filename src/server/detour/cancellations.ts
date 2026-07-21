@@ -48,13 +48,13 @@ export class CancellationStore {
         }
     }
 
-    private save(): void {
+    private async save(): Promise<void> {
         try {
             if (!fs.existsSync(this.storeDir)) {
-                fs.mkdirSync(this.storeDir, { recursive: true });
+                await fs.promises.mkdir(this.storeDir, { recursive: true });
             }
             const data = JSON.stringify(this.getAllCancelled(), null, 2);
-            fs.writeFileSync(this.storePath, data, 'utf-8');
+            await fs.promises.writeFile(this.storePath, data, 'utf-8');
         } catch (e) {
             console.error('Failed to save cancellations to disk:', e);
         }
