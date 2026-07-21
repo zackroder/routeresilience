@@ -6,7 +6,7 @@ interface RateLimitState {
 }
 
 const RATE_LIMIT_WINDOW_MS = 60000;
-const MAX_TOKENS = 60; // 60 requests per minute
+const MAX_TOKENS = 3000; // 3000 requests per minute
 const TOKEN_RECOVERY_RATE = MAX_TOKENS / RATE_LIMIT_WINDOW_MS;
 
 const rateLimitStore = new Map<string, RateLimitState>();
