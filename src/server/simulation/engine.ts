@@ -26,11 +26,11 @@ export class SimulationEngine implements VehicleDataSource {
     private vehicles: Map<string, VehicleState> = new Map();
     private vehiclesByTripId: Map<string, string> = new Map(); // tripId → vehicleId
     private interpolatedShapes: Map<string, InterpolatedShapePoint[]> = new Map();
-    private detourShapes: Map<string, InterpolatedShapePoint[]> = new Map(); // detourId → stitched shape
+    private detourShapes: Map<string, InterpolatedShapePoint[]> = new Map();
+    private stopShapeDistanceCache: Map<string, number> = new Map(); // key: shapeId_stopId // detourId → stitched shape
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private vehicleCounter = 0;
     private tickCounter = 0;
-    private targetVehicleCount = 0;
     private activeTripIds: string[] = [];
 
     // Congestion overlays: routeId/tripId -> speedMultiplier
@@ -125,6 +125,7 @@ export class SimulationEngine implements VehicleDataSource {
      *   - segmentDistances[i] = cumulative distance along shape to stop i
      */
     private computeSegmentSpeeds(
+        shapeId: string,
         stopTimes: { stop_id: string; arrival_time: number; departure_time: number }[],
         shape: InterpolatedShapePoint[],
         speedFactor: number,
@@ -133,23 +134,29 @@ export class SimulationEngine implements VehicleDataSource {
         const segmentDistances: number[] = [];
 
         for (const st of stopTimes) {
-            const stop = this.repo.getStop(st.stop_id);
-            if (!stop) {
-                // Fallback: distribute evenly
-                const fraction = segmentDistances.length / Math.max(stopTimes.length - 1, 1);
-                segmentDistances.push(fraction * shape[shape.length - 1].distance);
-                continue;
-            }
+            const cacheKey = `${shapeId}_${st.stop_id}`;
+            let bestShapeDist = this.stopShapeDistanceCache.get(cacheKey);
 
-            // Find nearest shape point to this stop
-            let bestDist = Infinity;
-            let bestShapeDist = 0;
-            for (const sp of shape) {
-                const d = haversineMeters(stop.stop_lat, stop.stop_lon, sp.lat, sp.lon);
-                if (d < bestDist) {
-                    bestDist = d;
-                    bestShapeDist = sp.distance;
+            if (bestShapeDist === undefined) {
+                const stop = this.repo.getStop(st.stop_id);
+                if (!stop) {
+                    // Fallback: distribute evenly
+                    const fraction = segmentDistances.length / Math.max(stopTimes.length - 1, 1);
+                    segmentDistances.push(fraction * shape[shape.length - 1].distance);
+                    continue;
                 }
+
+                // Find nearest shape point to this stop
+                let bestDist = Infinity;
+                bestShapeDist = 0;
+                for (const sp of shape) {
+                    const d = haversineMeters(stop.stop_lat, stop.stop_lon, sp.lat, sp.lon);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bestShapeDist = sp.distance;
+                    }
+                }
+                this.stopShapeDistanceCache.set(cacheKey, bestShapeDist);
             }
             segmentDistances.push(bestShapeDist);
         }
@@ -376,7 +383,7 @@ export class SimulationEngine implements VehicleDataSource {
                 ? this.generateSpeedFactor()
                 : 1.0;
 
-            const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(stopTimes, shape, speedFactor);
+            const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(trip.shape_id, stopTimes, shape, speedFactor);
 
             // Calculate base speed from schedule (for diagnostics)
             const totalTripDuration = lastArrival - firstDeparture;
@@ -418,8 +425,7 @@ export class SimulationEngine implements VehicleDataSource {
             spawned++;
         }
 
-        this.targetVehicleCount = Math.max(spawned, 800); // Keep at least 800 vehicles
-        console.log(`Spawned ${spawned} simulated vehicles (target: ${this.targetVehicleCount})`);
+        console.log(`Spawned ${spawned} simulated vehicles.`);
     }
 
     /**
@@ -432,84 +438,6 @@ export class SimulationEngine implements VehicleDataSource {
             }
         }
         return segmentSpeeds[segmentSpeeds.length - 1] || DEFAULT_SPEED_MPS;
-    }
-
-    /**
-     * Respawn a vehicle by assigning it to a random trip and placing it at the start.
-     * This maintains a consistent fleet size.
-     */
-    private respawnVehicle(vehicleId: string, now: number): void {
-        if (this.activeTripIds.length === 0) return;
-
-        // Pick a random trip from the active pool
-        const tripId = this.activeTripIds[Math.floor(Math.random() * this.activeTripIds.length)];
-        const trip = this.repo.getTrip(tripId);
-        if (!trip) return;
-
-        const shape = this.getInterpolatedShape(trip.shape_id);
-        if (!shape || shape.length < 2) return;
-
-        const stopTimes = this.repo.getStopTimes(tripId);
-        if (!stopTimes || stopTimes.length < 2) return;
-
-        const firstDeparture = stopTimes[0].departure_time;
-
-        // Start the vehicle at a random point along the first 20% of the route
-        const startProgress = Math.random() * 0.2;
-        const distanceTraveled = startProgress * shape[shape.length - 1].distance;
-
-        let shapeIndex = 0;
-        for (let i = 0; i < shape.length; i++) {
-            if (shape[i].distance >= distanceTraveled) {
-                shapeIndex = i;
-                break;
-            }
-        }
-
-        const pos = shape[shapeIndex];
-        const nextPos = shape[Math.min(shapeIndex + 1, shape.length - 1)];
-
-        // Calculate per-segment speeds
-        const speedFactor = process.env.SIMULATION_DEBUG_MODE === 'true'
-            ? this.generateSpeedFactor()
-            : 1.0;
-
-        const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(stopTimes, shape, speedFactor);
-        const initialSpeed = this.getSegmentSpeedAtDistance(distanceTraveled, segmentSpeeds, segmentDistances);
-
-        const totalDuration = stopTimes[stopTimes.length - 1].arrival_time - firstDeparture;
-        const baseSpeed = (totalDuration > 0 && shape[shape.length - 1].distance > 0)
-            ? (shape[shape.length - 1].distance / totalDuration)
-            : DEFAULT_SPEED_MPS;
-
-        this.vehicles.set(vehicleId, {
-            vehicleId,
-            tripId,
-            routeId: trip.route_id,
-            directionId: trip.direction_id,
-            lat: pos.lat,
-            lon: pos.lon,
-            bearing: this.calculateBearing(pos.lat, pos.lon, nextPos.lat, nextPos.lon),
-            speed: initialSpeed,
-            shapeIndex,
-            distanceTraveled,
-            totalDistance: shape[shape.length - 1].distance,
-            currentStopIndex: 0,
-            nextStopId: stopTimes[0].stop_id,
-            cachedStopTimes: stopTimes,
-            status: 'IN_TRANSIT',
-            tripStartTime: firstDeparture,
-            lastUpdateTime: now,
-            dwellEndTime: 0,
-            segmentSpeeds,
-            segmentDistances,
-            baseSpeed,
-            speedFactor: process.env.SIMULATION_DEBUG_MODE === 'true' ? speedFactor : undefined,
-            delaySeconds: 0,
-            occupancyStatus: this.getRandomOccupancy(),
-            congestionLevel: this.getCongestionFromSpeed(speedFactor),
-        });
-        this.vehiclesByTripId.set(tripId, vehicleId);
     }
 
     // ─── Simulation Loop ─────────────────────────────────────────────
@@ -540,7 +468,7 @@ export class SimulationEngine implements VehicleDataSource {
      */
     private tick(): void {
         const now = Date.now();
-        const toRespawn: string[] = [];
+        const toDespawn: string[] = [];
         this.tickCounter++;
 
         // Check for active detours once per tick (not per vehicle)
@@ -548,7 +476,7 @@ export class SimulationEngine implements VehicleDataSource {
 
         for (const [vehicleId, vehicle] of this.vehicles) {
             if (vehicle.status === 'COMPLETED') {
-                toRespawn.push(vehicleId);
+                toDespawn.push(vehicleId);
                 continue;
             }
 
@@ -692,18 +620,18 @@ export class SimulationEngine implements VehicleDataSource {
             }
         }
 
-        // Respawn completed vehicles instead of deleting them
-        for (const id of toRespawn) {
-            this.respawnVehicle(id, now);
+        // Despawn completed vehicles (freeing memory)
+        for (const id of toDespawn) {
+            const vehicle = this.vehicles.get(id);
+            if (vehicle) {
+                this.vehiclesByTripId.delete(vehicle.tripId);
+                this.vehicles.delete(id);
+            }
         }
 
-        // Every 30 ticks (~30s), check if we need to spawn more to maintain target
-        if (this.tickCounter % 30 === 0 && this.vehicles.size < this.targetVehicleCount) {
-            const deficit = this.targetVehicleCount - this.vehicles.size;
-            for (let i = 0; i < Math.min(deficit, 50); i++) {
-                const vehicleId = `v${++this.vehicleCounter}`;
-                this.respawnVehicle(vehicleId, now);
-            }
+        // Every 300 ticks (~5 min), refresh active trips schedule for current time of day
+        if (this.tickCounter % 300 === 0) {
+            this.spawnActiveVehicles(nowDate);
         }
     }
 

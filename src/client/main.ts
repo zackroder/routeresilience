@@ -2544,6 +2544,7 @@ function renderBlockViewchart() {
             const isCancelled = trip.is_cancelled;
             const isDetoured = trip.is_detoured;
             const isSelected = selectedTripIds.has(trip.trip_id);
+            const isCompleted = endSec < nowSec;
 
             const route = allRoutes.find(r => r.route_id === trip.route_id);
 
@@ -2555,7 +2556,8 @@ function renderBlockViewchart() {
 
             const additionalClass = [
                 isCancelled ? 'cancelled' : (isDetoured ? 'detoured' : ''),
-                isSelected ? 'trip-selected' : ''
+                isSelected ? 'trip-selected' : '',
+                isCompleted ? 'completed' : ''
             ].filter(Boolean).join(' ');
 
             html += `<div class="trip-bar ${additionalClass}" 

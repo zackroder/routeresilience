@@ -7,6 +7,7 @@ import unzipper from 'unzipper';
 import { GTFSRepository } from './database.js';
 
 const CTA_GTFS_URL = 'https://www.transitchicago.com/downloads/sch_data/google_transit.zip';
+
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const GTFS_ZIP_PATH = path.join(DATA_DIR, 'google_transit.zip');
 const GTFS_EXTRACTED_DIR = path.join(DATA_DIR, 'gtfs');
@@ -99,18 +100,31 @@ export async function loadGTFS(): Promise<GTFSRepository> {
         console.log('Extraction complete.');
     }
 
-    const DB_PATH = path.resolve(process.cwd(), 'data', 'gtfs.db');
+    const DB_PATH = path.join(DATA_DIR, 'gtfs.db');
+    const dbExists = fs.existsSync(DB_PATH);
+    console.log(`  [GTFS] DB_PATH=${DB_PATH} exists=${dbExists}`);
     
+    if (dbExists) {
+        const stat = fs.statSync(DB_PATH);
+        console.log(`  [GTFS] DB size=${(stat.size / 1024 / 1024).toFixed(1)}MB`);
+    }
+
     // Open in readonly mode initially to prevent Docker overlayFS from copying the 700MB file on boot
-    let repo = new GTFSRepository({ readonly: fs.existsSync(DB_PATH) });
+    console.log(`  [GTFS] Opening database (readonly=${dbExists})...`);
+    const openStart = Date.now();
+    let repo = new GTFSRepository({ readonly: dbExists });
+    console.log(`  [GTFS] Database opened in ${Date.now() - openStart}ms`);
     let db = repo.getDb();
 
-    // Check if DB is empty
-    const routeCount = db.prepare('SELECT count(*) as count FROM routes').get() as { count: number };
-    const tripCount = db.prepare('SELECT count(*) as count FROM trips').get() as { count: number };
-    const stCountCheck = db.prepare('SELECT count(*) as count FROM stop_times').get() as { count: number };
+    // Check if DB is populated (O(1) instead of O(N) full table scan)
+    console.log('  [GTFS] Running population check...');
+    const checkStart = Date.now();
+    const routeCheck = db.prepare('SELECT 1 FROM routes LIMIT 1').get();
+    const tripCheck = db.prepare('SELECT 1 FROM trips LIMIT 1').get();
+    const stCheck = db.prepare('SELECT 1 FROM stop_times LIMIT 1').get();
+    console.log(`  [GTFS] Population check done in ${Date.now() - checkStart}ms (routes=${!!routeCheck} trips=${!!tripCheck} stop_times=${!!stCheck})`);
 
-    if (routeCount.count > 0 && tripCount.count > 0 && stCountCheck.count > 0) {
+    if (routeCheck && tripCheck && stCheck) {
         console.log('GTFS database already populated. skipping import.');
         return repo;
     } else {
@@ -127,7 +141,7 @@ export async function loadGTFS(): Promise<GTFSRepository> {
     // Optimize SQLite for massive bulk inserts
     db.pragma('synchronous = OFF');
     db.pragma('temp_store = MEMORY');
-    db.pragma('cache_size = -64000'); // 64MB cache
+    db.pragma('cache_size = -8000'); // 8MB cache (constrained for 256MB VMs)
 
     db.exec('BEGIN TRANSACTION');
 
@@ -330,6 +344,23 @@ export async function loadGTFS(): Promise<GTFSRepository> {
             WHERE trips.trip_id = bounds.trip_id
         `);
         updateTripTimes.run();
+
+        // 9. Update Trip Start/End Stop IDs
+        console.log('Updating trip start/end stop IDs...');
+        const updateTripStops = db.prepare(`
+            UPDATE trips
+            SET start_stop_id = (
+                SELECT stop_id FROM stop_times 
+                WHERE trip_id = trips.trip_id 
+                ORDER BY stop_sequence ASC LIMIT 1
+            ),
+            end_stop_id = (
+                SELECT stop_id FROM stop_times 
+                WHERE trip_id = trips.trip_id 
+                ORDER BY stop_sequence DESC LIMIT 1
+            )
+        `);
+        updateTripStops.run();
 
         // COMMIT the huge transaction
         db.exec('COMMIT');

@@ -29,6 +29,8 @@ const SCHEMA = `
         block_id TEXT,
         start_time INTEGER, -- computed from stop_times
         end_time INTEGER,   -- computed from stop_times
+        start_stop_id TEXT, -- computed from stop_times (first stop)
+        end_stop_id TEXT,   -- computed from stop_times (last stop)
         FOREIGN KEY(route_id) REFERENCES routes(route_id)
     );
     CREATE INDEX IF NOT EXISTS idx_trips_route_dir ON trips(route_id, direction_id);
@@ -278,14 +280,8 @@ export class GTFSRepository {
                 s_start.stop_name as start_stop_name,
                 s_end.stop_name as end_stop_name
             FROM active_trips at
-            JOIN stop_times st_start ON at.trip_id = st_start.trip_id AND st_start.stop_sequence = (
-                SELECT MIN(stop_sequence) FROM stop_times WHERE trip_id = at.trip_id
-            )
-            JOIN stops s_start ON st_start.stop_id = s_start.stop_id
-            JOIN stop_times st_end ON at.trip_id = st_end.trip_id AND st_end.stop_sequence = (
-                SELECT MAX(stop_sequence) FROM stop_times WHERE trip_id = at.trip_id
-            )
-            JOIN stops s_end ON st_end.stop_id = s_end.stop_id
+            LEFT JOIN stops s_start ON at.start_stop_id = s_start.stop_id
+            LEFT JOIN stops s_end ON at.end_stop_id = s_end.stop_id
             ORDER BY at.block_id, at.start_time
         `).all(dateStr, dateStr, dateStr, dateStr) as (Trip & { start_stop_name: string; end_stop_name: string })[];
 
