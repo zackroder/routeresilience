@@ -2130,7 +2130,9 @@ function doRestoreTrips(ids: string[]) {
                 
                 showModal({
                     title: 'Success',
-                    message: `<div style="text-align:center;">Successfully restored <strong>${futureIds.length} trips</strong>!</div>`,
+                    message: `<div style="text-align:center;">
+                        <div style="font-size: 16px; font-weight: 500; color: var(--text-primary);">Successfully restored <strong>${futureIds.length} trips</strong>!</div>
+                    </div>`,
                     type: 'success',
                     confirmText: 'OK',
                     cancelText: ''
@@ -2781,6 +2783,7 @@ async function cancelSelectedTrips() {
     }
 
     const defaultDate = (document.getElementById('block-view-date') as HTMLInputElement).value;
+    const todayFormatted = new Date().toISOString().slice(0, 10);
     const countStr = `Cancel ${summaryLabel}`;
     
     const htmlMessage = `
@@ -2790,12 +2793,12 @@ async function cancelSelectedTrips() {
         <div style="display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.03); border-radius: 12px; padding: 4px; border: 1px solid var(--border-subtle); margin: 0 auto 12px auto; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
             <div style="display: flex; flex-direction: column; flex: 1; padding: 6px 12px;">
                 <label style="font-size:10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; color:var(--text-secondary); margin-bottom:2px;">Start Date</label>
-                <input type="date" id="cancel-start-date" value="${defaultDate}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
+                <input type="date" id="cancel-start-date" min="${todayFormatted}" value="${defaultDate}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
             </div>
             <div style="width: 1px; height: 32px; background: var(--border-subtle); margin: 0 4px;"></div>
             <div style="display: flex; flex-direction: column; flex: 1; padding: 6px 12px;">
                 <label style="font-size:10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; color:var(--text-secondary); margin-bottom:2px;">End Date</label>
-                <input type="date" id="cancel-end-date" value="${defaultDate}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
+                <input type="date" id="cancel-end-date" min="${todayFormatted}" value="${defaultDate}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
             </div>
         </div>
     `;
@@ -2826,7 +2829,10 @@ async function cancelSelectedTrips() {
                 const dateStr = startFormatted === endFormatted ? startFormatted : `${startFormatted} - ${endFormatted}`;
                 showModal({
                     title: 'Success',
-                    message: `<div style="text-align:center;">Successfully cancelled <strong>${summaryLabel}</strong><br>for dates: ${dateStr}</div>`,
+                    message: `<div style="text-align:center;">
+                        <div style="font-size: 16px; font-weight: 500; color: var(--text-primary); margin-bottom: 6px;">Successfully cancelled <strong>${summaryLabel}</strong></div>
+                        <div style="font-size: 14px; color: var(--text-secondary);">for dates: ${dateStr}</div>
+                    </div>`,
                     type: 'success',
                     confirmText: 'OK',
                     cancelText: '' // Hide cancel button
@@ -2849,6 +2855,24 @@ async function cancelSelectedTrips() {
             }
         }
     });
+
+    // Enforce date constraints
+    const startInput = document.getElementById('cancel-start-date') as HTMLInputElement;
+    const endInput = document.getElementById('cancel-end-date') as HTMLInputElement;
+    if (startInput && endInput) {
+        startInput.addEventListener('change', () => {
+            endInput.min = startInput.value;
+            if (endInput.value < startInput.value) {
+                endInput.value = startInput.value;
+            }
+        });
+        
+        // Initial setup
+        if (endInput.value < startInput.value) {
+            endInput.value = startInput.value;
+        }
+        endInput.min = startInput.value;
+    }
 }
 
 function parseTime(time: string | number): number {
