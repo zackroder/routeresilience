@@ -23,69 +23,81 @@ export function createApiRouter(
     /** Get blocks for today (or specific date) */
     router.get('/blocks', (req: Request, res: Response) => {
         const dateStr = (req.query.date as string) || new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        const blocks = repo.getBlocks(dateStr);
-
+        const tripIterator = repo.streamBlocks(dateStr);
+        
         // Get all active detours to check against
-        // Note: This is a simplification. Ideally we check specific date. 
-        // But detours are stored with full ISO timestamps, so we can check overlap.
         const allDetours = detourStore.getAll(); // In-memory, fast enough
 
-        // Convert Map to array of objects
-        const result = Array.from(blocks.entries()).map(([blockId, trips]) => ({
-            block_id: blockId,
-            trips: trips.map(t => {
-                // Check for detour overlap
-                // Trip times are seconds from midnight (e.g. 36000 = 10am)
-                // Detour times are ISO strings. We need to convert detour times to seconds-from-midnight relative to the requested date.
-                // Or easier: Convert trip times to full Date objects for comparison? 
-                // Let's rely on the requested date.
+        res.setHeader('Cache-Control', 'public, max-age=60');
+        res.type('json');
+        res.write('[');
 
-                let isDetoured = false;
+        let firstBlock = true;
+        let currentBlockId: string | null = null;
+        let currentTrips: any[] = [];
 
-                // Parse the requested date (YYYYMMDD)
-                const y = parseInt(dateStr.slice(0, 4));
-                const m = parseInt(dateStr.slice(4, 6)) - 1;
-                const d = parseInt(dateStr.slice(6, 8));
+        const writeCurrentBlock = () => {
+            if (currentBlockId === null) return;
+            const blockObj = {
+                block_id: currentBlockId,
+                trips: currentTrips
+            };
+            if (!firstBlock) res.write(',');
+            res.write(JSON.stringify(blockObj));
+            firstBlock = false;
+        };
 
-                // Trip Start Time (absolute)
-                const tripStart = new Date(y, m, d, 0, 0, 0);
-                tripStart.setSeconds(t.start_time);
+        const y = parseInt(dateStr.slice(0, 4));
+        const m = parseInt(dateStr.slice(4, 6)) - 1;
+        const d = parseInt(dateStr.slice(6, 8));
 
-                // Trip End Time (absolute)
-                const tripEnd = new Date(y, m, d, 0, 0, 0);
-                tripEnd.setSeconds(t.end_time);
+        for (const t of tripIterator) {
+            if (t.block_id !== currentBlockId) {
+                if (currentBlockId !== null) {
+                    writeCurrentBlock();
+                }
+                currentBlockId = t.block_id;
+                currentTrips = [];
+            }
 
-                // Check detours
-                for (const dt of allDetours) {
-                    if (dt.routeId === t.route_id && dt.directionId === t.direction_id) {
-                        const dStart = new Date(dt.startTime);
-                        const dEnd = new Date(dt.endTime);
+            let isDetoured = false;
+            const tripStart = new Date(y, m, d, 0, 0, 0);
+            tripStart.setSeconds(t.start_time);
+            const tripEnd = new Date(y, m, d, 0, 0, 0);
+            tripEnd.setSeconds(t.end_time);
 
-                        // Check overlap
-                        if (tripStart < dEnd && tripEnd > dStart) {
-                            isDetoured = true;
-                            break;
-                        }
+            for (const dt of allDetours) {
+                if (dt.routeId === t.route_id && dt.directionId === t.direction_id) {
+                    const dStart = new Date(dt.startTime);
+                    const dEnd = new Date(dt.endTime);
+                    if (tripStart < dEnd && tripEnd > dStart) {
+                        isDetoured = true;
+                        break;
                     }
                 }
+            }
 
-                return {
-                    trip_id: t.trip_id,
-                    route_id: t.route_id,
-                    direction_id: t.direction_id,
-                    // service_id: t.service_id, // Optimized out
-                    start_time: t.start_time,
-                    end_time: t.end_time,
-                    trip_headsign: t.trip_headsign,
-                    is_cancelled: cancellationStore.isCancelled(t.trip_id),
-                    is_detoured: isDetoured,
-                    start_stop_name: t.start_stop_name,
-                    end_stop_name: t.end_stop_name
-                };
-            })
-        }));
+            currentTrips.push({
+                trip_id: t.trip_id,
+                route_id: t.route_id,
+                direction_id: t.direction_id,
+                start_time: t.start_time,
+                end_time: t.end_time,
+                trip_headsign: t.trip_headsign,
+                is_cancelled: cancellationStore.isCancelled(t.trip_id),
+                is_detoured: isDetoured,
+                start_stop_name: t.start_stop_name,
+                end_stop_name: t.end_stop_name
+            });
+        }
 
-        res.json(result);
+        // Flush the last block
+        if (currentBlockId !== null) {
+            writeCurrentBlock();
+        }
+
+        res.write(']');
+        res.end();
     });
 
     /** Get all cancelled trip IDs with details */
