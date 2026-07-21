@@ -1795,6 +1795,8 @@ body.light-theme .modal-overlay {
   width: fit-content;
   /* Grow with content */
   min-width: 100%;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
 }
 
 .block-label {
