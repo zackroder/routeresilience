@@ -122,22 +122,42 @@ export const api = {
     // Block / Cancellation API
     getBlocks: (dateStr?: string) => fetchJson<BlockData[]>('/blocks' + (dateStr ? `?date=${dateStr}` : '')),
     getCancellations: () => fetchJson<CancelledTripData[]>('/cancellations'),
-    cancelTrip: async (tripId: string) => {
+    cancelTrip: async (tripId: string, start_date: string, end_date: string) => {
         const res = await fetch(`${API_BASE}/trips/${tripId}/cancel`, { 
             method: 'POST',
-            headers: { 'X-API-Key': 'dev-key' }
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify({ start_date, end_date })
         });
         if (!res.ok) throw new Error(`API error: ${res.status}`);
         return res.json();
     },
-    restoreTrip: async (tripId: string) => {
+    restoreTrip: async (tripId: string, date: string) => {
         const res = await fetch(`${API_BASE}/trips/${tripId}/restore`, { 
             method: 'POST',
-            headers: { 'X-API-Key': 'dev-key' }
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify({ date })
         });
         if (!res.ok) throw new Error(`API error: ${res.status}`);
         return res.json();
-    }
+    },
+    cancelTripsBulk: async (payloads: {tripId: string, startDate: string, endDate: string}[]) => {
+        const res = await fetch(`${API_BASE}/trips/cancel-bulk`, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify({ payloads })
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
+    restoreTripsBulk: async (keys: string[]) => {
+        const res = await fetch(`${API_BASE}/trips/restore-bulk`, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify({ keys })
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
 };
 
 export interface BlockData {

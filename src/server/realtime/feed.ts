@@ -83,7 +83,7 @@ export class FeedGenerator {
         const vehicles = this.vehicleSource.getVehicles();
         for (const vehicle of vehicles) {
             // Skip cancelled trips
-            if (this.cancellationStore.isCancelled(vehicle.tripId)) continue;
+            if (this.cancellationStore.isCancelled(vehicle.tripId, dateStr)) continue;
 
             entities.push({
                 id: String(entityId++),
@@ -120,7 +120,7 @@ export class FeedGenerator {
 
         for (const trip of activeTrips) {
             // Handle cancelled trips
-            if (this.cancellationStore.isCancelled(trip.trip_id)) {
+            if (this.cancellationStore.isCancelled(trip.trip_id, dateStr)) {
                 entities.push({
                     id: String(entityId++),
                     tripUpdate: {
