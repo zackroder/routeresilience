@@ -398,6 +398,7 @@ export class SimulationEngine implements VehicleDataSource {
                 tripId: trip.trip_id,
                 routeId: trip.route_id,
                 directionId: trip.direction_id,
+                shapeId: trip.shape_id,
                 lat: pos.lat,
                 lon: pos.lon,
                 bearing,
@@ -473,6 +474,7 @@ export class SimulationEngine implements VehicleDataSource {
 
         // Check for active detours once per tick (not per vehicle)
         const nowDate = new Date(now);
+        const activeDetoursCache = new Map<string, Detour[]>();
 
         for (const [vehicleId, vehicle] of this.vehicles) {
             if (vehicle.status === 'COMPLETED') {
@@ -494,16 +496,19 @@ export class SimulationEngine implements VehicleDataSource {
             }
 
             // Get the shape this vehicle follows (may be a detour shape)
-            const trip = this.repo.getTrip(vehicle.tripId);
-            if (!trip) continue;
-
-            let shape = this.getInterpolatedShape(trip.shape_id);
+            let shape = this.getInterpolatedShape(vehicle.shapeId);
             if (!shape) continue;
 
             let shapeSwitched = false;
             // ─── Detour following ───
             if (this.detourStore && !vehicle.usingDetourShape) {
-                const activeDetours = this.detourStore.getActiveForRoute(vehicle.routeId, vehicle.directionId, nowDate);
+                const cacheKey = `${vehicle.routeId}_${vehicle.directionId}`;
+                let activeDetours = activeDetoursCache.get(cacheKey);
+                if (!activeDetours) {
+                    activeDetours = this.detourStore.getActiveForRoute(vehicle.routeId, vehicle.directionId, nowDate);
+                    activeDetoursCache.set(cacheKey, activeDetours);
+                }
+                
                 if (activeDetours.length > 0) {
                     const detour = activeDetours[0]; // Use first active detour
 
@@ -522,7 +527,7 @@ export class SimulationEngine implements VehicleDataSource {
 
                         // Only switch if the vehicle hasn't passed the diverge point yet
                         if (vehicle.distanceTraveled < divergeShapeDist) {
-                            const detourShape = this.getDetourShape(detour, trip.shape_id);
+                            const detourShape = this.getDetourShape(detour, vehicle.shapeId);
                             if (detourShape && detourShape.length > 2) {
                                 shape = detourShape;
                                 vehicle.usingDetourShape = true;
@@ -533,7 +538,7 @@ export class SimulationEngine implements VehicleDataSource {
                         }
                     } else {
                         // Immediately switch if there's no diverge stop
-                        const detourShape = this.getDetourShape(detour, trip.shape_id);
+                        const detourShape = this.getDetourShape(detour, vehicle.shapeId);
                         if (detourShape && detourShape.length > 2) {
                             shape = detourShape;
                             vehicle.usingDetourShape = true;
