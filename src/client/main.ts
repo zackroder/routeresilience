@@ -2158,10 +2158,10 @@ function doRestoreTrips(ids: string[]) {
             }
 
             try {
-                await Promise.all(filteredIds.map(uid => {
+                for (const uid of filteredIds) {
                     const [tId, rawDate] = uid.split('_');
-                    return api.restoreTrip(tId, rawDate);
-                }));
+                    await api.restoreTrip(tId, rawDate);
+                }
                 selectedCancelledIds.clear();
                 await loadCancelledTrips();
                 if (activeView === 'blocks') loadBlockView();
@@ -2810,8 +2810,10 @@ async function cancelSelectedTrips() {
             }
             
             try {
-                // Execute cancellations
-                await Promise.all(toCancel.map(id => api.cancelTrip(id, startVal, endVal)));
+                // Execute cancellations sequentially to avoid rate limits
+                for (const id of toCancel) {
+                    await api.cancelTrip(id, startVal, endVal);
+                }
                 
                 // Update local cache so the chart re-renders correctly if the cancellation applies to the current view
                 if (startVal <= selectedDateStr && selectedDateStr <= endVal) {
