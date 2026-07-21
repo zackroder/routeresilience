@@ -143,7 +143,7 @@ export class FeedGenerator {
             const stopTimes = this.repo.getStopTimes(trip.trip_id);
             if (!stopTimes || stopTimes.length === 0) continue;
 
-            const prediction = this.predictions.predictTrip(trip.trip_id, now);
+            const prediction = this.predictions.predictTrip(trip.trip_id, now, trip, stopTimes);
             if (!prediction) continue;
 
             entities.push({

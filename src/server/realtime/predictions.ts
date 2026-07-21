@@ -51,11 +51,16 @@ export class PredictionEngine {
     /**
      * Generate predictions for a single trip.
      */
-    predictTrip(tripId: string, now: Date = new Date()): TripPrediction | null {
-        const trip = this.repo.getTrip(tripId);
+    predictTrip(
+        tripId: string,
+        now: Date = new Date(),
+        preFetchedTrip?: any,
+        preFetchedStopTimes?: any[],
+    ): TripPrediction | null {
+        const trip = preFetchedTrip ?? this.repo.getTrip(tripId);
         if (!trip) return null;
 
-        const stopTimes = this.repo.getStopTimes(tripId);
+        const stopTimes = preFetchedStopTimes ?? this.repo.getStopTimes(tripId);
         if (!stopTimes || stopTimes.length === 0) return null;
 
         const vehicle = this.vehicleSource.getVehicleForTrip(tripId);
@@ -200,9 +205,10 @@ export class PredictionEngine {
      */
     private buildStopLocationMap(stopIds: string[]): Map<string, StopLocation> {
         const map = new Map<string, StopLocation>();
+        const allStopsMap = this.repo.getAllStopsMap();
         for (const id of stopIds) {
             if (map.has(id)) continue;
-            const stop = this.repo.getStop(id);
+            const stop = allStopsMap.get(id);
             if (stop) {
                 map.set(id, {
                     stop_id: stop.stop_id,

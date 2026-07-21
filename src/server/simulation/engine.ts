@@ -393,6 +393,9 @@ export class SimulationEngine implements VehicleDataSource {
             // Initial speed = segment speed at current position
             const initialSpeed = this.getSegmentSpeedAtDistance(distanceTraveled, segmentSpeeds, segmentDistances);
 
+            const nextStopObj = stopTimes[Math.min(currentStopIndex + 1, stopTimes.length - 1)];
+            const nextStopData = nextStopObj ? this.repo.getStop(nextStopObj.stop_id) : null;
+
             this.vehicles.set(vehicleId, {
                 vehicleId,
                 tripId: trip.trip_id,
@@ -407,7 +410,9 @@ export class SimulationEngine implements VehicleDataSource {
                 distanceTraveled,
                 totalDistance: shape[shape.length - 1].distance,
                 currentStopIndex,
-                nextStopId: stopTimes[Math.min(currentStopIndex + 1, stopTimes.length - 1)].stop_id,
+                nextStopId: nextStopObj.stop_id,
+                nextStopLat: nextStopData?.stop_lat,
+                nextStopLon: nextStopData?.stop_lon,
                 cachedStopTimes: stopTimes,
                 status: 'IN_TRANSIT',
                 tripStartTime: firstDeparture,
@@ -490,6 +495,9 @@ export class SimulationEngine implements VehicleDataSource {
 
                     if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length) {
                         vehicle.nextStopId = vehicle.cachedStopTimes[vehicle.currentStopIndex].stop_id;
+                        const nextStopData = this.repo.getStop(vehicle.nextStopId);
+                        vehicle.nextStopLat = nextStopData?.stop_lat;
+                        vehicle.nextStopLon = nextStopData?.stop_lon;
                     }
                 }
                 continue;
@@ -598,27 +606,24 @@ export class SimulationEngine implements VehicleDataSource {
             vehicle.bearing = this.calculateBearing(curr.lat, curr.lon, next.lat, next.lon);
 
             // Check if near next stop — trigger dwell
-            if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length) {
-                const nextStop = this.repo.getStop(vehicle.nextStopId);
-                if (nextStop) {
-                    const distToStop = haversineMeters(vehicle.lat, vehicle.lon, nextStop.stop_lat, nextStop.stop_lon);
-                    if (distToStop < 30) { // within 30m of stop
-                        vehicle.status = 'AT_STOP';
-                        vehicle.dwellEndTime = now + STOP_DWELL_MS;
-                        vehicle.lat = nextStop.stop_lat;
-                        vehicle.lon = nextStop.stop_lon;
+            if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length && vehicle.nextStopLat !== undefined && vehicle.nextStopLon !== undefined) {
+                const distToStop = haversineMeters(vehicle.lat, vehicle.lon, vehicle.nextStopLat, vehicle.nextStopLon);
+                if (distToStop < 30) { // within 30m of stop
+                    vehicle.status = 'AT_STOP';
+                    vehicle.dwellEndTime = now + STOP_DWELL_MS;
+                    vehicle.lat = vehicle.nextStopLat;
+                    vehicle.lon = vehicle.nextStopLon;
 
-                        // Record arrival and compute delay
-                        if (process.env.SIMULATION_DEBUG_MODE === 'true') {
-                            this.recordArrival(vehicle, nextStop.stop_id, now);
+                    // Record arrival and compute delay
+                    if (process.env.SIMULATION_DEBUG_MODE === 'true') {
+                        this.recordArrival(vehicle, vehicle.nextStopId, now);
 
-                            // Compute schedule delay: actual arrival vs scheduled
-                            const nowDate = new Date(now);
-                            const secsSinceMidnight = nowDate.getHours() * 3600 + nowDate.getMinutes() * 60 + nowDate.getSeconds();
-                            const scheduledArrival = vehicle.cachedStopTimes[vehicle.currentStopIndex]?.arrival_time;
-                            if (scheduledArrival !== undefined) {
-                                vehicle.delaySeconds = secsSinceMidnight - scheduledArrival;
-                            }
+                        // Compute schedule delay: actual arrival vs scheduled
+                        const nowDate = new Date(now);
+                        const secsSinceMidnight = nowDate.getHours() * 3600 + nowDate.getMinutes() * 60 + nowDate.getSeconds();
+                        const scheduledArrival = vehicle.cachedStopTimes[vehicle.currentStopIndex]?.arrival_time;
+                        if (scheduledArrival !== undefined) {
+                            vehicle.delaySeconds = secsSinceMidnight - scheduledArrival;
                         }
                     }
                 }

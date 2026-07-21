@@ -98,6 +98,7 @@ const SCHEMA = `
 
 export class GTFSRepository {
     private db: Database.Database;
+    private stopCache: Map<string, Stop> | null = null;
 
     constructor(options: { clear?: boolean, readonly?: boolean } = {}) {
         const dataDir = path.dirname(DB_PATH);
@@ -120,6 +121,17 @@ export class GTFSRepository {
             this.db.pragma('journal_mode = WAL');
             this.db.exec(SCHEMA);
         }
+    }
+
+    private initStopCache(): Map<string, Stop> {
+        if (!this.stopCache) {
+            const stops = this.getAllStops();
+            this.stopCache = new Map<string, Stop>();
+            for (const s of stops) {
+                this.stopCache.set(s.stop_id, s);
+            }
+        }
+        return this.stopCache;
     }
 
     // ─── Transaction Helper ───
@@ -155,8 +167,12 @@ export class GTFSRepository {
         return this.db.prepare('SELECT * FROM stops').all() as Stop[];
     }
 
+    getAllStopsMap(): Map<string, Stop> {
+        return this.initStopCache();
+    }
+
     getStop(stopId: string): Stop | undefined {
-        return this.db.prepare('SELECT * FROM stops WHERE stop_id = ?').get(stopId) as Stop | undefined;
+        return this.initStopCache().get(stopId);
     }
 
     getStopsInBounds(minLat: number, minLon: number, maxLat: number, maxLon: number): Stop[] {

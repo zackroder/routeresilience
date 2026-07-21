@@ -23,6 +23,8 @@ export interface VehicleState {
     // Schedule progress
     currentStopIndex: number;  // index into the trip's stop time array
     nextStopId: string;
+    nextStopLat?: number;
+    nextStopLon?: number;
     cachedStopTimes: StopTime[]; // cached at spawn, never changes
     status: 'IN_TRANSIT' | 'AT_STOP' | 'COMPLETED';
 
