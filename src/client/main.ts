@@ -2688,16 +2688,18 @@ async function cancelSelectedTrips() {
     const countStr = toCancel.length === 1 ? 'Cancel 1 Trip' : `Cancel ${toCancel.length} Trips`;
     
     const htmlMessage = `
-        <div style="margin-bottom: 12px;">Select the date range for this cancellation:</div>
-        <div style="display: flex; gap: 12px; align-items: center; justify-content: center; margin-bottom: 8px;">
-            <div style="display: flex; flex-direction: column; align-items: flex-start;">
-                <label style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Start Date</label>
-                <input type="date" id="cancel-start-date" value="${defaultDate}" class="app-input" style="width: 140px;">
+        <div style="margin-bottom: 16px; font-size: 14px; color: var(--text-secondary); text-align: center;">
+            Specify the date range for these cancellations:
+        </div>
+        <div style="display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.03); border-radius: 12px; padding: 4px; border: 1px solid var(--border-subtle); margin: 0 auto 12px auto; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
+            <div style="display: flex; flex-direction: column; flex: 1; padding: 6px 12px;">
+                <label style="font-size:10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; color:var(--text-secondary); margin-bottom:2px;">Start Date</label>
+                <input type="date" id="cancel-start-date" value="${defaultDate}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
             </div>
-            <span style="color:var(--text-secondary); margin-top:16px;">&rarr;</span>
-            <div style="display: flex; flex-direction: column; align-items: flex-start;">
-                <label style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">End Date</label>
-                <input type="date" id="cancel-end-date" value="${defaultDate}" class="app-input" style="width: 140px;">
+            <div style="width: 1px; height: 32px; background: var(--border-subtle); margin: 0 4px;"></div>
+            <div style="display: flex; flex-direction: column; flex: 1; padding: 6px 12px;">
+                <label style="font-size:10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; color:var(--text-secondary); margin-bottom:2px;">End Date</label>
+                <input type="date" id="cancel-end-date" value="${defaultDate}" style="background: transparent; border: none; outline: none; font-size: 14px; font-family: inherit; color: var(--text-primary); cursor: pointer; padding: 0;">
             </div>
         </div>
     `;
