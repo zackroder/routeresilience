@@ -1915,25 +1915,29 @@ body.light-theme .block-label.all-selected {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px 8px 16px;
+  padding: 12px 24px;
   background: var(--bg-surface);
-  border-bottom: 1px solid var(--accent-blue);
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
-  gap: 12px;
-  animation: slideDown 0.15s ease;
-  flex-shrink: 0;
-  /* doesn't compress in flex column layout */
+  border: 1px solid var(--border-subtle);
+  border-radius: 30px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+  gap: 16px;
+  animation: slideUp 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
 }
 
-@keyframes slideDown {
+@keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: translate(-50%, 20px);
   }
-
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate(-50%, 0);
   }
 }
 
