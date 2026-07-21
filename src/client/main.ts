@@ -2830,8 +2830,8 @@ async function cancelSelectedTrips() {
                 showModal({
                     title: 'Success',
                     message: `<div style="text-align:center;">
-                        <div style="font-size: 16px; font-weight: 500; color: var(--text-primary); margin-bottom: 6px;">Successfully cancelled <strong>${summaryLabel}</strong></div>
-                        <div style="font-size: 14px; color: var(--text-secondary);">for dates: ${dateStr}</div>
+                        <div style="font-size: 16px; font-weight: 500; color: var(--text-primary); margin-bottom: 4px;">Successfully cancelled <strong>${summaryLabel}</strong></div>
+                        <div style="font-size: 13px; color: var(--text-muted);">${dateStr}</div>
                     </div>`,
                     type: 'success',
                     confirmText: 'OK',
