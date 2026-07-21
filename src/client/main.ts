@@ -2093,7 +2093,7 @@ function renderHomeCancelledSummary(count: number) {
             <div style="font-size:24px;font-weight:700;color:var(--text-muted);line-height:1">0</div>
             <div style="display:flex;flex-direction:column;justify-content:center">
                 <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled Trips</div>
-                <div style="font-size:11px;color:var(--text-secondary)">Upcoming</div>
+                <div style="font-size:11px;color:var(--text-secondary)">Active & Upcoming</div>
             </div>
         `;
         return;
@@ -2104,7 +2104,7 @@ function renderHomeCancelledSummary(count: number) {
         <div style="font-size:24px;font-weight:700;color:var(--accent-red);line-height:1">${count}</div>
         <div style="display:flex;flex-direction:column;justify-content:center">
             <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled Trips</div>
-            <div style="font-size:11px;color:var(--text-secondary)">Upcoming</div>
+            <div style="font-size:11px;color:var(--text-secondary)">Active & Upcoming</div>
         </div>
     `;
 }
