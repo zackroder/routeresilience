@@ -253,13 +253,13 @@ export class GTFSRepository {
     }
 
     /**
-     * Get all trips for a specific date, grouped by block_id.
-     * Returns a map of block_id -> Trip[].
+     * Stream all trips for a specific date, ordered by block_id.
+     * Returns an iterator that yields one trip at a time to prevent memory spikes.
      */
-    getBlocks(dateStr: string): Map<string, (Trip & { start_stop_name: string; end_stop_name: string })[]> {
+    streamBlocks(dateStr: string): IterableIterator<Trip & { start_stop_name: string; end_stop_name: string }> {
         const dayOfWeek = this.getDayColumnName(dateStr);
 
-        const rows = this.db.prepare(`
+        return this.db.prepare(`
             WITH active_trips AS (
                 SELECT t.*
                 FROM trips t
@@ -283,16 +283,7 @@ export class GTFSRepository {
             LEFT JOIN stops s_start ON at.start_stop_id = s_start.stop_id
             LEFT JOIN stops s_end ON at.end_stop_id = s_end.stop_id
             ORDER BY at.block_id, at.start_time
-        `).all(dateStr, dateStr, dateStr, dateStr) as (Trip & { start_stop_name: string; end_stop_name: string })[];
-
-        const blocks = new Map<string, (Trip & { start_stop_name: string; end_stop_name: string })[]>();
-        for (const trip of rows) {
-            if (!blocks.has(trip.block_id)) {
-                blocks.set(trip.block_id, []);
-            }
-            blocks.get(trip.block_id)!.push(trip);
-        }
-        return blocks;
+        `).iterate(dateStr, dateStr, dateStr, dateStr) as IterableIterator<Trip & { start_stop_name: string; end_stop_name: string }>;
     }
 
     // ─── Counts ───
