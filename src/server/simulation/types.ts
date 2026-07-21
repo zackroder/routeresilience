@@ -7,6 +7,7 @@ export interface VehicleState {
     tripId: string;
     routeId: string;
     directionId: number;
+    shapeId: string;
 
     // Position
     lat: number;
