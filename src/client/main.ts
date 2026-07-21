@@ -1880,11 +1880,20 @@ async function loadCancelledTrips() {
 
         const items = cancellations as any[];
 
+        const nowSec = getNowSeconds();
+        const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        
+        let activeCount = 0;
+        for (const t of items) {
+            const isPassed = t.raw_date < todayStr || (t.raw_date === todayStr && parseTime(t.end_time) <= nowSec);
+            if (!isPassed) activeCount++;
+        }
+
         // Update widget count
         const widgetCount = document.getElementById('count-cancelled');
-        if (widgetCount) widgetCount.textContent = String(items.length);
+        if (widgetCount) widgetCount.textContent = String(activeCount);
 
-        renderHomeCancelledSummary(items.length);
+        renderHomeCancelledSummary(activeCount);
 
         if (items.length === 0) {
             container.innerHTML = '<div class="empty-state">No cancelled trips</div>';
@@ -1917,6 +1926,9 @@ function renderCancelledList(items: any[]) {
         grouped.get(bId)!.push(item);
     });
 
+    const nowSec = getNowSeconds();
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
     let html = '';
     grouped.forEach((trips, blockId) => {
         const allChecked = trips.every(t => selectedCancelledIds.has(t.trip_id));
@@ -1931,18 +1943,22 @@ function renderCancelledList(items: any[]) {
             </div>
             <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px;">
                 ${trips.map((t: any) => {
-            const isChecked = selectedCancelledIds.has(t.trip_id);
+            const uniqueId = `${t.trip_id}_${t.raw_date}`;
+            const isChecked = selectedCancelledIds.has(uniqueId);
             const routeColor = t.route_color ? `#${t.route_color}` : 'var(--accent-blue)';
             const routeTextColor = t.route_text_color ? `#${t.route_text_color}` : '#fff';
             const startStr = t.start_time != null ? formatTime(t.start_time) : '—';
             const endStr = t.end_time != null ? formatTime(t.end_time) : '—';
             const first = t.first_stop_name || '—';
             const last = t.last_stop_name || '—';
+            
+            const isPassed = t.raw_date < todayStr || (t.raw_date === todayStr && parseTime(t.end_time) <= nowSec);
+            const opacityStyle = isPassed ? 'opacity: 0.5;' : '';
 
             return `
-                    <div class="cancelled-trip-card${isChecked ? ' card-selected' : ''}" data-trip-id="${t.trip_id}" data-block-id="${blockId}">
+                    <div class="cancelled-trip-card${isChecked ? ' card-selected' : ''}" data-trip-id="${uniqueId}" data-block-id="${blockId}" style="${opacityStyle}">
                         <div style="display:flex;align-items:flex-start;gap:10px">
-                            <input type="checkbox" class="cancel-check" data-trip-id="${t.trip_id}" data-block-id="${blockId}"
+                            <input type="checkbox" class="cancel-check" data-trip-id="${uniqueId}" data-block-id="${blockId}"
                                 style="margin-top:3px;flex-shrink:0;cursor:pointer;accent-color:var(--accent-blue)"
                                 ${isChecked ? 'checked' : ''}>
                             <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:0">
@@ -1950,7 +1966,10 @@ function renderCancelledList(items: any[]) {
                                     <span style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;background:${routeColor};color:${routeTextColor};white-space:nowrap">
                                         ${t.route_short_name || t.route_id}
                                     </span>
-                                    <span style="font-size:10px;color:var(--text-muted)">${startStr} – ${endStr}</span>
+                                    <span style="font-size:10px;color:var(--text-muted)">
+                                        ${isPassed ? '<span style="color:var(--accent-red);font-weight:600;">(Passed)</span> ' : ''}
+                                        ${t.date} · ${startStr} – ${endStr}
+                                    </span>
                                 </div>
                                 <div style="display:flex;align-items:stretch;gap:6px">
                                     <div style="display:flex;flex-direction:column;align-items:center;padding:2px 0;flex-shrink:0">
@@ -1964,7 +1983,7 @@ function renderCancelledList(items: any[]) {
                                     </div>
                                 </div>
                             </div>
-                            <button class="btn btn-secondary btn-sm btn-restore-single" data-trip-id="${t.trip_id}"
+                            <button class="btn btn-secondary btn-sm btn-restore-single" data-trip-id="${uniqueId}"
                                 style="flex-shrink:0;align-self:center">Restore</button>
                         </div>
                     </div>`;
@@ -2053,7 +2072,10 @@ function doRestoreTrips(ids: string[]) {
     const label = ids.length === 1 ? 'this trip' : `${ids.length} trips`;
     showConfirm(`Restore ${label}?`, async () => {
         try {
-            await Promise.all(ids.map(id => api.restoreTrip(id)));
+            await Promise.all(ids.map(uid => {
+                const [tId, rawDate] = uid.split('_');
+                return api.restoreTrip(tId, rawDate);
+            }));
             selectedCancelledIds.clear();
             await loadCancelledTrips();
             if (activeView === 'blocks') loadBlockView();
@@ -2071,7 +2093,7 @@ function renderHomeCancelledSummary(count: number) {
             <div style="font-size:24px;font-weight:700;color:var(--text-muted);line-height:1">0</div>
             <div style="display:flex;flex-direction:column;justify-content:center">
                 <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled Trips</div>
-                <div style="font-size:11px;color:var(--text-secondary)">Today</div>
+                <div style="font-size:11px;color:var(--text-secondary)">Upcoming</div>
             </div>
         `;
         return;
@@ -2082,7 +2104,7 @@ function renderHomeCancelledSummary(count: number) {
         <div style="font-size:24px;font-weight:700;color:var(--accent-red);line-height:1">${count}</div>
         <div style="display:flex;flex-direction:column;justify-content:center">
             <div style="font-weight:600;color:var(--text-primary);font-size:13px">Cancelled Trips</div>
-            <div style="font-size:11px;color:var(--text-secondary)">Today</div>
+            <div style="font-size:11px;color:var(--text-secondary)">Upcoming</div>
         </div>
     `;
 }
@@ -2469,10 +2491,18 @@ function renderBlockViewchart() {
 
     // ── Action bar (shown when trips are selected) ──────────────────────────
     const selCount = selectedTripIds.size;
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+
     const cancellableCount = [...selectedTripIds].filter(id => {
         for (const b of cachedBlocks) {
             const t = b.trips.find(t => t.trip_id === id);
-            if (t) return !t.is_cancelled && parseTime(t.end_time) > nowSec;
+            if (t) {
+                if (t.is_cancelled) return false;
+                if (selectedDateStr < todayStr) return false;
+                if (selectedDateStr === todayStr && parseTime(t.end_time) <= nowSec) return false;
+                return true;
+            }
         }
         return false;
     }).length;
@@ -2515,7 +2545,16 @@ function renderBlockViewchart() {
         const blockTrips = block.trips;
         const blockTripIds = blockTrips.map(t => t.trip_id);
         const selectedInBlock = blockTripIds.filter(id => selectedTripIds.has(id)).length;
-        const cancellableInBlock = blockTrips.filter(t => !t.is_cancelled && parseTime(t.end_time) > nowSec).length;
+        const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+        const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        
+        const cancellableInBlock = blockTrips.filter(t => {
+            if (t.is_cancelled) return false;
+            if (selectedDateStr < todayStr) return false; // Past days cannot be cancelled
+            if (selectedDateStr === todayStr && parseTime(t.end_time) <= nowSec) return false;
+            return true;
+        }).length;
+        
         const labelClass = selectedInBlock === 0 ? '' :
             (selectedInBlock === cancellableInBlock ? 'all-selected' : 'partial-selected');
 
@@ -2544,7 +2583,11 @@ function renderBlockViewchart() {
             const isCancelled = trip.is_cancelled;
             const isDetoured = trip.is_detoured;
             const isSelected = selectedTripIds.has(trip.trip_id);
-            const isCompleted = endSec < nowSec;
+            
+            const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+            
+            const isCompleted = (selectedDateStr < todayStr) || (selectedDateStr === todayStr && endSec < nowSec);
 
             const route = allRoutes.find(r => r.route_id === trip.route_id);
 
@@ -2592,7 +2635,15 @@ function selectBlock(blockId: string) {
     if (!block) return;
 
     const nowSec = getNowSeconds();
-    const cancellable = block.trips.filter(t => !t.is_cancelled && parseTime(t.end_time) > nowSec);
+    const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+    const cancellable = block.trips.filter(t => {
+        if (t.is_cancelled) return false;
+        if (selectedDateStr < todayStr) return false;
+        if (selectedDateStr === todayStr && parseTime(t.end_time) <= nowSec) return false;
+        return true;
+    });
     if (cancellable.length === 0) {
         showAlert(`No cancellable trips in block ${blockId}.`);
         return;
@@ -2612,31 +2663,72 @@ function selectBlock(blockId: string) {
 /** Confirm and cancel all currently selected (and cancellable) trips. */
 async function cancelSelectedTrips() {
     const nowSec = getNowSeconds();
+    const selectedDateStr = (document.getElementById('block-view-date') as HTMLInputElement).value.replace(/-/g, '');
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    
     const toCancel: string[] = [];
     for (const id of selectedTripIds) {
         for (const b of cachedBlocks) {
             const trip = b.trips.find(t => t.trip_id === id);
-            if (trip && !trip.is_cancelled && parseTime(trip.end_time) > nowSec) {
-                toCancel.push(id);
-                break;
+            if (trip && !trip.is_cancelled) {
+                // Must be valid for cancellation
+                if (selectedDateStr > todayStr || (selectedDateStr === todayStr && parseTime(trip.end_time) > nowSec)) {
+                    toCancel.push(id);
+                    break;
+                }
             }
         }
     }
+    
     if (toCancel.length === 0) {
         showAlert('No cancellable trips in selection (they may already be cancelled or in the past).');
         return;
     }
 
-    showConfirm(
-        `Cancel ${toCancel.length} selected trip${toCancel.length !== 1 ? 's' : ''}?\nThis cannot be undone from this dialog.`,
-        async () => {
+    const defaultDate = (document.getElementById('block-view-date') as HTMLInputElement).value;
+    const countStr = toCancel.length === 1 ? 'Cancel 1 Trip' : `Cancel ${toCancel.length} Trips`;
+    
+    const htmlMessage = `
+        <div style="margin-bottom: 12px;">Select the date range for this cancellation:</div>
+        <div style="display: flex; gap: 12px; align-items: center; justify-content: center; margin-bottom: 8px;">
+            <div style="display: flex; flex-direction: column; align-items: flex-start;">
+                <label style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Start Date</label>
+                <input type="date" id="cancel-start-date" value="${defaultDate}" class="app-input" style="width: 140px;">
+            </div>
+            <span style="color:var(--text-secondary); margin-top:16px;">&rarr;</span>
+            <div style="display: flex; flex-direction: column; align-items: flex-start;">
+                <label style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">End Date</label>
+                <input type="date" id="cancel-end-date" value="${defaultDate}" class="app-input" style="width: 140px;">
+            </div>
+        </div>
+    `;
+
+    showModal({
+        title: 'Cancel Trips',
+        message: htmlMessage,
+        type: 'danger',
+        confirmText: countStr,
+        cancelText: 'Abort',
+        onConfirm: async () => {
+            const startVal = (document.getElementById('cancel-start-date') as HTMLInputElement).value.replace(/-/g, '');
+            const endVal = (document.getElementById('cancel-end-date') as HTMLInputElement).value.replace(/-/g, '');
+            
+            if (!startVal || !endVal || startVal > endVal) {
+                showAlert('Invalid date range selected.');
+                return;
+            }
+            
             try {
-                await Promise.all(toCancel.map(id => api.cancelTrip(id)));
-                // Update local cache so the chart re-renders correctly
-                for (const id of toCancel) {
-                    for (const b of cachedBlocks) {
-                        const trip = b.trips.find(t => t.trip_id === id);
-                        if (trip) { trip.is_cancelled = true; break; }
+                // Execute cancellations
+                await Promise.all(toCancel.map(id => api.cancelTrip(id, startVal, endVal)));
+                
+                // Update local cache so the chart re-renders correctly if the cancellation applies to the current view
+                if (startVal <= selectedDateStr && selectedDateStr <= endVal) {
+                    for (const id of toCancel) {
+                        for (const b of cachedBlocks) {
+                            const trip = b.trips.find(t => t.trip_id === id);
+                            if (trip) trip.is_cancelled = true;
+                        }
                     }
                 }
                 selectedTripIds.clear();
@@ -2645,11 +2737,8 @@ async function cancelSelectedTrips() {
             } catch (err: any) {
                 showError('Failed to cancel some trips: ' + err.message);
             }
-        },
-        'Cancel Selected Trips',
-        `Cancel ${toCancel.length} Trip${toCancel.length !== 1 ? 's' : ''}`,
-        'Go Back'
-    );
+        }
+    });
 }
 
 function parseTime(time: string | number): number {

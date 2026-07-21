@@ -84,7 +84,7 @@ export function createApiRouter(
                 start_time: t.start_time,
                 end_time: t.end_time,
                 trip_headsign: t.trip_headsign,
-                is_cancelled: cancellationStore.isCancelled(t.trip_id),
+                is_cancelled: cancellationStore.isCancelled(t.trip_id, dateStr),
                 is_detoured: isDetoured,
                 start_stop_name: t.start_stop_name,
                 end_stop_name: t.end_stop_name
@@ -102,17 +102,34 @@ export function createApiRouter(
 
     /** Get all cancelled trip IDs with details */
     router.get('/cancellations', (_req: Request, res: Response) => {
-        const ids = cancellationStore.getAllCancelled();
-        const details = ids.map(id => {
+        const keys = cancellationStore.getAllCancelled();
+        const details = keys.map(key => {
+            const [id, date] = key.split('_');
             const trip = repo.getTrip(id);
-            if (!trip) return { trip_id: id, status: 'UNKNOWN' };
+            if (!trip) return null;
             const route = repo.getRoute(trip.route_id);
-            // Fetch first/last stop names from stop_times
-            const stopTimes = repo.getStopTimes(id) || [];
-            const firstStop = stopTimes.length > 0 ? repo.getStop(stopTimes[0].stop_id) : null;
-            const lastStop = stopTimes.length > 0 ? repo.getStop(stopTimes[stopTimes.length - 1].stop_id) : null;
+            
+            // Get stop times for this trip to find first and last stop
+            const stopTimes = repo.getStopTimes(id);
+            let first_stop_name = 'Unknown';
+            let last_stop_name = 'Unknown';
+            
+            if (stopTimes.length > 0) {
+                const firstStopId = stopTimes[0].stop_id;
+                const lastStopId = stopTimes[stopTimes.length - 1].stop_id;
+                const firstStop = repo.getStop(firstStopId);
+                const lastStop = repo.getStop(lastStopId);
+                if (firstStop) first_stop_name = firstStop.stop_name;
+                if (lastStop) last_stop_name = lastStop.stop_name;
+            }
+
+            // Format date for UI
+            const formattedDate = `${date.slice(4,6)}/${date.slice(6,8)}/${date.slice(0,4)}`;
+
             return {
                 trip_id: id,
+                date: formattedDate,
+                raw_date: date,
                 route_id: trip.route_id,
                 route_short_name: route?.route_short_name,
                 route_color: route?.route_color,
@@ -121,22 +138,30 @@ export function createApiRouter(
                 block_id: trip.block_id,
                 start_time: trip.start_time,
                 end_time: trip.end_time,
-                first_stop_name: firstStop?.stop_name || null,
-                last_stop_name: lastStop?.stop_name || null,
+                first_stop_name,
+                last_stop_name
             };
-        });
+        }).filter(Boolean);
         res.json(details);
     });
 
     /** Cancel a trip */
     router.post('/trips/:id/cancel', (req: Request, res: Response) => {
-        cancellationStore.cancelTrip(req.params.id);
+        const { start_date, end_date } = req.body;
+        if (!start_date || !end_date) {
+            return res.status(400).json({ error: 'start_date and end_date required (YYYYMMDD)' });
+        }
+        cancellationStore.cancelTrip(req.params.id, start_date, end_date);
         res.json({ success: true, trip_id: req.params.id, status: 'CANCELED' });
     });
 
     /** Restore a trip */
     router.post('/trips/:id/restore', (req: Request, res: Response) => {
-        cancellationStore.restoreTrip(req.params.id);
+        const { date } = req.body;
+        if (!date) {
+            return res.status(400).json({ error: 'date required (YYYYMMDD)' });
+        }
+        cancellationStore.restoreTrip(req.params.id, date);
         res.json({ success: true, trip_id: req.params.id, status: 'RESTORED' });
     });
 
