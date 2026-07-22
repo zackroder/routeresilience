@@ -1,6 +1,11 @@
 app = "routeresilience"
 primary_region = "ord"
 
+[vm]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
 [build]
   dockerfile = "Dockerfile"
 
