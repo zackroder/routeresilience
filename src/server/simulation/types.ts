@@ -25,7 +25,7 @@ export interface VehicleState {
     nextStopId: string;
     nextStopLat?: number;
     nextStopLon?: number;
-    cachedStopTimes: StopTime[]; // cached at spawn, never changes
+    cachedStopTimes: { stop_id: string; arrival_time: number }[]; // cached at spawn, slim to save memory
     status: 'IN_TRANSIT' | 'AT_STOP' | 'COMPLETED';
 
     // Timing

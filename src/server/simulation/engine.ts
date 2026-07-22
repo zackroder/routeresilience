@@ -15,7 +15,6 @@ import { VehicleDataSource } from '../realtime/vehicle-data-source.js';
  * variation, capped at MAX_SPEED_MPS.
  */
 
-const INTERPOLATION_INTERVAL_METERS = 10; // interpolate a point every 10m
 const DEFAULT_SPEED_MPS = 8.9;            // ~20 mph average city bus speed
 const MAX_SPEED_MPS = 15.6;               // ~35 mph — cap for unrealistic schedule segments
 const STOP_DWELL_MS = 15_000;             // 15 seconds dwell at each stop
@@ -80,19 +79,7 @@ export class SimulationEngine implements VehicleDataSource {
             const curr = points[i];
             const segDist = haversineMeters(prev.shape_pt_lat, prev.shape_pt_lon, curr.shape_pt_lat, curr.shape_pt_lon);
 
-            // Add interpolated points along this segment
-            const numInterpPoints = Math.floor(segDist / INTERPOLATION_INTERVAL_METERS);
-            for (let j = 1; j <= numInterpPoints; j++) {
-                const t = j / (numInterpPoints + 1);
-                cumulativeDistance += INTERPOLATION_INTERVAL_METERS;
-                result.push({
-                    lat: prev.shape_pt_lat + t * (curr.shape_pt_lat - prev.shape_pt_lat),
-                    lon: prev.shape_pt_lon + t * (curr.shape_pt_lon - prev.shape_pt_lon),
-                    distance: cumulativeDistance,
-                });
-            }
-
-            cumulativeDistance += segDist - numInterpPoints * INTERPOLATION_INTERVAL_METERS;
+            cumulativeDistance += segDist;
             result.push({ lat: curr.shape_pt_lat, lon: curr.shape_pt_lon, distance: cumulativeDistance });
         }
 
@@ -413,7 +400,7 @@ export class SimulationEngine implements VehicleDataSource {
                 nextStopId: nextStopObj.stop_id,
                 nextStopLat: nextStopData?.stop_lat,
                 nextStopLon: nextStopData?.stop_lon,
-                cachedStopTimes: stopTimes,
+                cachedStopTimes: stopTimes.map(st => ({ stop_id: st.stop_id, arrival_time: st.arrival_time })),
                 status: 'IN_TRANSIT',
                 tripStartTime: firstDeparture,
                 lastUpdateTime: now.getTime(),
