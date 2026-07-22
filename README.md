@@ -51,7 +51,9 @@ Ingests GTFS schedule and geographic data in conjunction with vehicle location f
 ### 1. GTFS-RT Ingestion & Middleware Proxy
 Currently, RouteResilience runs a high-performance, internal simulation engine to generate thousands of realistic vehicle positions based on the static schedule. 
 
-In a true production environment, the ultimate model is to configure RouteResilience as a **GTFS-RT Middleware Proxy**. Instead of simulating vehicles, the system will ingest the transit agency's raw, upstream GTFS-RT `VehiclePositions` feed. The application will correlate real buses to the static schedule, seamlessly overlay the user-created detours (`TripModifications`), and emit an enhanced, corrected GTFS-RT feed downstream to platforms like Google Maps and Apple Maps.
+In a true production deployment, the ultimate model is to configure RouteResilience as a **GTFS-RT Middleware Proxy**. Instead of simulating vehicles, the system will ingest the transit agency's raw, upstream GTFS-RT `VehiclePositions` feed. The application will correlate real buses to the static schedule, seamlessly overlay the user-created detours (`TripModifications`), and emit an enhanced, corrected GTFS-RT feed downstream to platforms like Google Maps and Apple Maps.
+
+> **Read the [Production Architecture Design](./ARCHITECTURE.md)** to see how this system scales to handle heavy GTFS-RT ingestion using PostgreSQL (PostGIS), Redis, and decoupled worker tiers.
 
 ### 2. Service Management & Headway Adherence
 As a GTFS-RT middleware proxy with real-time knowledge of bus locations and the static schedule, RouteResilience is perfectly positioned to monitor **schedule adherence and headways**. 
