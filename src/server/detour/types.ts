@@ -10,6 +10,8 @@ export interface ReplacementStopDef {
     isTemporary: boolean;
     /** Estimated travel time in seconds from previous stop (or from diverge point for first) */
     travelTimeFromPrevious: number;
+    /** Optional dwell time in seconds at this stop (default 30) */
+    dwellTime?: number;
 }
 
 export interface Detour {
@@ -42,6 +44,9 @@ export interface Detour {
     /** Stops skipped during this detour */
     skippedStops?: { stopId: string; stopName: string }[];
 
+    /** Assumed speed of the bus on the detour (m/s) */
+    assumedSpeedMps?: number;
+
     createdAt: string;
 }
 
@@ -58,4 +63,5 @@ export interface CreateDetourRequest {
     endTime: string;
     description: string;
     skippedStops?: { stopId: string; stopName: string }[];
+    assumedSpeedMps?: number;
 }

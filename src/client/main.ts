@@ -794,9 +794,43 @@ function addReplacementStop(stopId: string, name: string, lat: number, lon: numb
     // Estimate travel time from previous point
     let travelTime = 60; // default 60s
     if (detourPathPoints.length > 0) {
-        const prev = detourPathPoints[detourPathPoints.length - 1];
-        const dist = haversine(prev[0], prev[1], lat, lon);
-        travelTime = Math.round(dist / 8.9); // speed / 8.9 m/s (~20 mph)
+        const speedInput = document.getElementById('detour-speed') as HTMLInputElement;
+        const assumedSpeed = speedInput ? parseFloat(speedInput.value) * 0.44704 : 5.5; // mph to m/s
+
+        // Find previous coordinates
+        let prevLat, prevLon;
+        if (replacementStops.length > 0) {
+            prevLat = replacementStops[replacementStops.length - 1].lat;
+            prevLon = replacementStops[replacementStops.length - 1].lon;
+        } else if (divergeStopInfo) {
+            prevLat = divergeStopInfo.stop_lat;
+            prevLon = divergeStopInfo.stop_lon;
+        }
+
+        if (prevLat !== undefined && prevLon !== undefined) {
+            // Calculate distance along the detour path from prev to current
+            let startIdx = 0, endIdx = detourPathPoints.length - 1;
+            let minDistStart = Infinity, minDistEnd = Infinity;
+            
+            for (let i = 0; i < detourPathPoints.length; i++) {
+                const dStart = haversine(prevLat, prevLon, detourPathPoints[i][0], detourPathPoints[i][1]);
+                if (dStart < minDistStart) { minDistStart = dStart; startIdx = i; }
+                const dEnd = haversine(lat, lon, detourPathPoints[i][0], detourPathPoints[i][1]);
+                if (dEnd < minDistEnd) { minDistEnd = dEnd; endIdx = i; }
+            }
+            
+            let dist = 0;
+            const minI = Math.min(startIdx, endIdx);
+            const maxI = Math.max(startIdx, endIdx);
+            for (let i = minI; i < maxI; i++) {
+                dist += haversine(detourPathPoints[i][0], detourPathPoints[i][1], detourPathPoints[i+1][0], detourPathPoints[i+1][1]);
+            }
+            travelTime = Math.round(dist / assumedSpeed);
+        } else {
+            const prev = detourPathPoints[detourPathPoints.length - 1];
+            const dist = haversine(prev[0], prev[1], lat, lon);
+            travelTime = Math.round(dist / assumedSpeed);
+        }
     }
 
     replacementStops.push({
@@ -1234,6 +1268,9 @@ async function activateDetour() {
             }));
         }
 
+        const speedInput = document.getElementById('detour-speed') as HTMLInputElement;
+        const assumedSpeedMps = speedInput ? parseFloat(speedInput.value) * 0.44704 : 5.5;
+
         const detour = await api.createDetour({
             routeId: selectedRoute.route_id,
             directionId: selectedDirection,
@@ -1245,6 +1282,7 @@ async function activateDetour() {
             endTime: new Date(endTime).toISOString(),
             description,
             skippedStops,
+            assumedSpeedMps,
         });
 
         console.log('Detour created:', detour);
