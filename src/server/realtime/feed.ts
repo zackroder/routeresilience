@@ -119,15 +119,15 @@ export class FeedGenerator {
             });
         }
 
-        // ─── 2. TripUpdate entities for ALL active trips ───
+        // ─── 2. TripUpdate entities for ALL active trips with live vehicles ───
         const activeTrips = this.repo.getActiveTrips(dateStr, nowSeconds);
 
         for (const trip of activeTrips) {
-            const vehicleId = tripToVehicleMap.get(trip.trip_id);
-            const vehicleDescriptor = vehicleId ? { id: vehicleId, label: `Bus ${vehicleId}` } : undefined;
-
             // Handle cancelled trips
             if (this.cancellationStore.isCancelled(trip.trip_id, dateStr)) {
+                const vehicleId = tripToVehicleMap.get(trip.trip_id);
+                const vehicleDescriptor = vehicleId ? { id: vehicleId, label: `Bus ${vehicleId}` } : undefined;
+
                 entities.push({
                     id: String(entityId++),
                     tripUpdate: {
@@ -144,6 +144,11 @@ export class FeedGenerator {
                 });
                 continue;
             }
+
+            // Only generate real-time predictions for trips actively tracked by vehicleSource
+            const vehicleId = tripToVehicleMap.get(trip.trip_id);
+            if (!vehicleId) continue;
+            const vehicleDescriptor = { id: vehicleId, label: `Bus ${vehicleId}` };
 
             // If trip is modified, it's handled in the modified section
             if (modifiedTrips.has(trip.trip_id)) continue;
@@ -164,7 +169,7 @@ export class FeedGenerator {
                         startDate: dateStr,
                         scheduleRelationship: 0, // SCHEDULED
                     },
-                    ...(vehicleDescriptor ? { vehicle: vehicleDescriptor } : {}),
+                    vehicle: vehicleDescriptor,
                     stopTimeUpdate: prediction.predictions.map(p => ({
                         stopSequence: p.stopSequence,
                         stopId: p.stopId,
@@ -177,13 +182,15 @@ export class FeedGenerator {
             });
         }
 
-        // ─── 3. TripUpdate entities for MODIFIED trips (detoured) ───
+        // ─── 3. TripUpdate entities for MODIFIED trips (detoured) with live vehicles ───
         for (const [tripId, modTrip] of modifiedTrips) {
             const trip = this.repo.getTrip(tripId);
             if (!trip) continue;
 
+            // Only generate real-time predictions for detoured trips actively tracked by vehicleSource
             const vehicleId = tripToVehicleMap.get(tripId);
-            const vehicleDescriptor = vehicleId ? { id: vehicleId, label: `Bus ${vehicleId}` } : undefined;
+            if (!vehicleId) continue;
+            const vehicleDescriptor = { id: vehicleId, label: `Bus ${vehicleId}` };
 
             const stopTimeUpdates: any[] = modTrip.modifiedStopTimes
                 .filter(ms => !ms.isReplacement)
@@ -224,7 +231,7 @@ export class FeedGenerator {
                             affectedTripId: tripId,
                         }
                     },
-                    ...(vehicleDescriptor ? { vehicle: vehicleDescriptor } : {}),
+                    vehicle: vehicleDescriptor,
                     stopTimeUpdate: stopTimeUpdates,
                     timestamp: nowEpoch,
                 },
