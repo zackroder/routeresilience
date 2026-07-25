@@ -185,14 +185,16 @@ export class FeedGenerator {
             const vehicleId = tripToVehicleMap.get(tripId);
             const vehicleDescriptor = vehicleId ? { id: vehicleId, label: `Bus ${vehicleId}` } : undefined;
 
-            const stopTimeUpdates: any[] = modTrip.modifiedStopTimes.map(ms => ({
-                stopSequence: ms.stopSequence,
-                stopId: ms.stopId,
-                // #4: use pre-computed midnightEpoch instead of flawed inline formula
-                arrival: { time: midnightEpoch + ms.arrivalTime },
-                departure: { time: midnightEpoch + ms.departureTime },
-                scheduleRelationship: 0, // SCHEDULED
-            }));
+            const stopTimeUpdates: any[] = modTrip.modifiedStopTimes
+                .filter(ms => !ms.isReplacement)
+                .map(ms => ({
+                    stopSequence: ms.stopSequence,
+                    stopId: ms.stopId,
+                    // #4: use pre-computed midnightEpoch instead of flawed inline formula
+                    arrival: { time: midnightEpoch + ms.arrivalTime },
+                    departure: { time: midnightEpoch + ms.departureTime },
+                    scheduleRelationship: 0, // SCHEDULED
+                }));
 
             // Include explicit SKIPPED stopTimeUpdates for all bypassed original stops
             if (modTrip.skippedStops && modTrip.skippedStops.length > 0) {
@@ -204,6 +206,9 @@ export class FeedGenerator {
                     });
                 }
             }
+
+            // Fix E002: Ensure stopTimeUpdates are strictly sorted ascending by stopSequence
+            stopTimeUpdates.sort((a, b) => a.stopSequence - b.stopSequence);
 
             entities.push({
                 id: String(entityId++),
