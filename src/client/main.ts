@@ -802,9 +802,9 @@ function addReplacementStop(stopId: string, name: string, lat: number, lon: numb
         if (replacementStops.length > 0) {
             prevLat = replacementStops[replacementStops.length - 1].lat;
             prevLon = replacementStops[replacementStops.length - 1].lon;
-        } else if (divergeStopInfo) {
-            prevLat = divergeStopInfo.stop_lat;
-            prevLon = divergeStopInfo.stop_lon;
+        } else if (divergeStop) {
+            prevLat = divergeStop.stop_lat;
+            prevLon = divergeStop.stop_lon;
         }
 
         if (prevLat !== undefined && prevLon !== undefined) {
