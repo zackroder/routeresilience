@@ -203,30 +203,30 @@ export class FeedGenerator {
         // ─── 4. TripModifications entities for active detours ───
         for (const detour of activeDetours) {
             const affectedTripIds = this.detourEngine.getAffectedTripIds(detour, dateStr);
-            if (affectedTripIds.length === 0) continue;
-
             const detourShapeId = `detour_${detour.id}`;
             const serviceAlertId = `alert_${detour.id}`;
 
-            entities.push({
-                id: `tm_${detour.id}`,
-                tripModifications: {
-                    selectedTrips: [{
-                        tripIds: affectedTripIds,
-                        shapeId: detourShapeId,
-                    }],
-                    modifications: [{
-                        ...(detour.startStopId ? { startStopSelector: { stopId: detour.startStopId } } : {}),
-                        ...(detour.endStopId ? { endStopSelector: { stopId: detour.endStopId } } : {}),
-                        propagatedModificationDelay: 0,
-                        replacementStops: detour.replacementStops.map(rs => ({
-                            stopId: rs.stopId,
-                            travelTimeToStop: rs.travelTimeFromPrevious,
-                        })),
-                        serviceAlertId: serviceAlertId,
-                    }],
-                },
-            });
+            if (affectedTripIds.length > 0) {
+                entities.push({
+                    id: `tm_${detour.id}`,
+                    tripModifications: {
+                        selectedTrips: [{
+                            tripIds: affectedTripIds,
+                            shapeId: detourShapeId,
+                        }],
+                        modifications: [{
+                            ...(detour.startStopId ? { startStopSelector: { stopId: detour.startStopId } } : {}),
+                            ...(detour.endStopId ? { endStopSelector: { stopId: detour.endStopId } } : {}),
+                            propagatedModificationDelay: 0,
+                            replacementStops: detour.replacementStops.map(rs => ({
+                                stopId: rs.stopId,
+                                travelTimeToStop: rs.travelTimeFromPrevious,
+                            })),
+                            serviceAlertId: serviceAlertId,
+                        }],
+                    },
+                });
+            }
 
             // ─── 5. Shape entity for the detour geometry ───
             entities.push({

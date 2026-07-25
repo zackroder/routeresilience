@@ -138,10 +138,22 @@ export async function loadGTFS(): Promise<GTFSRepository> {
     console.log('Importing GTFS data into SQLite using async streams...');
     const startTime = Date.now();
 
-    // Optimize SQLite for massive bulk inserts
+    // Optimize SQLite for bulk inserts while strictly adhering to Fly.io 512MB VM limits
     db.pragma('synchronous = OFF');
     db.pragma('temp_store = MEMORY');
-    db.pragma('cache_size = -8000'); // 8MB cache (constrained for 256MB VMs)
+    db.pragma('cache_size = -16000'); // 16MB cache (safe budget for 512MB Fly.io container)
+
+    // Drop indexes to speed up bulk inserts
+    db.exec(`
+        DROP INDEX IF EXISTS idx_trips_route_dir;
+        DROP INDEX IF EXISTS idx_trips_service;
+        DROP INDEX IF EXISTS idx_trips_starttime;
+        DROP INDEX IF EXISTS idx_trips_endtime;
+        DROP INDEX IF EXISTS idx_stops_loc;
+        DROP INDEX IF EXISTS idx_st_trip;
+        DROP INDEX IF EXISTS idx_st_stop;
+        DROP INDEX IF EXISTS idx_shapes_id;
+    `);
 
     db.exec('BEGIN TRANSACTION');
 
@@ -379,6 +391,20 @@ export async function loadGTFS(): Promise<GTFSRepository> {
 
         // COMMIT the huge transaction
         db.exec('COMMIT');
+
+        console.log('Rebuilding database indexes...');
+        const indexStart = Date.now();
+        db.exec(`
+            CREATE INDEX IF NOT EXISTS idx_trips_route_dir ON trips(route_id, direction_id);
+            CREATE INDEX IF NOT EXISTS idx_trips_service ON trips(service_id);
+            CREATE INDEX IF NOT EXISTS idx_trips_starttime ON trips(start_time);
+            CREATE INDEX IF NOT EXISTS idx_trips_endtime ON trips(end_time);
+            CREATE INDEX IF NOT EXISTS idx_stops_loc ON stops(stop_lat, stop_lon);
+            CREATE INDEX IF NOT EXISTS idx_st_trip ON stop_times(trip_id);
+            CREATE INDEX IF NOT EXISTS idx_st_stop ON stop_times(stop_id);
+            CREATE INDEX IF NOT EXISTS idx_shapes_id ON shapes(shape_id);
+        `);
+        console.log(`Indexes built in ${Date.now() - indexStart}ms`);
 
         // Restore safe pragmas
         db.pragma('synchronous = NORMAL');
