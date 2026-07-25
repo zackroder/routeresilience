@@ -231,20 +231,49 @@ export async function loadGTFS(): Promise<GTFSRepository> {
             return h * 3600 + m * 60 + s;
         };
 
+        const tripBoundsMap = new Map<string, { minTime: number; maxTime: number; minSeq: number; maxSeq: number; firstStopId: string; lastStopId: string }>();
+
         await parseCSVStream(gtfsPath('stop_times.txt'), (st) => {
             if (!validTripIds.has(st.trip_id)) return;
 
+            const arrTime = parseTime(st.arrival_time);
+            const depTime = parseTime(st.departure_time);
+            const seq = parseInt(st.stop_sequence);
+
             insertStopTime.run({
                 trip_id: st.trip_id,
-                arrival_time: parseTime(st.arrival_time),
-                departure_time: parseTime(st.departure_time),
+                arrival_time: arrTime,
+                departure_time: depTime,
                 stop_id: st.stop_id,
-                stop_sequence: parseInt(st.stop_sequence),
+                stop_sequence: seq,
                 pickup_type: parseInt(st.pickup_type) || 0,
                 drop_off_type: parseInt(st.drop_off_type) || 0,
                 shape_dist_traveled: parseFloat(st.shape_dist_traveled) || 0
             });
             stCountInserted++;
+
+            const bound = tripBoundsMap.get(st.trip_id);
+            if (!bound) {
+                tripBoundsMap.set(st.trip_id, {
+                    minTime: arrTime,
+                    maxTime: depTime,
+                    minSeq: seq,
+                    maxSeq: seq,
+                    firstStopId: st.stop_id,
+                    lastStopId: st.stop_id,
+                });
+            } else {
+                if (arrTime < bound.minTime) bound.minTime = arrTime;
+                if (depTime > bound.maxTime) bound.maxTime = depTime;
+                if (seq < bound.minSeq) {
+                    bound.minSeq = seq;
+                    bound.firstStopId = st.stop_id;
+                }
+                if (seq > bound.maxSeq) {
+                    bound.maxSeq = seq;
+                    bound.lastStopId = st.stop_id;
+                }
+            }
         });
         console.log(`Imported ${stCountInserted} stop times`);
 
@@ -331,36 +360,22 @@ export async function loadGTFS(): Promise<GTFSRepository> {
             }
         }
 
-        // 8. Update Trip Start/End Times
-        console.log('Updating trip start/end times...');
-        const updateTripTimes = db.prepare(`
+        // 8. Update Trip Start/End Times and Stop IDs
+        console.log('Updating trip start/end times and stop IDs...');
+        const updateTripInfo = db.prepare(`
             UPDATE trips 
-            SET start_time = bounds.start_time, end_time = bounds.end_time
-            FROM (
-                SELECT trip_id, min(arrival_time) as start_time, max(departure_time) as end_time
-                FROM stop_times
-                GROUP BY trip_id
-            ) bounds
-            WHERE trips.trip_id = bounds.trip_id
+            SET start_time = @startTime, end_time = @endTime, start_stop_id = @startStopId, end_stop_id = @endStopId
+            WHERE trip_id = @tripId
         `);
-        updateTripTimes.run();
-
-        // 9. Update Trip Start/End Stop IDs
-        console.log('Updating trip start/end stop IDs...');
-        const updateTripStops = db.prepare(`
-            UPDATE trips
-            SET start_stop_id = (
-                SELECT stop_id FROM stop_times 
-                WHERE trip_id = trips.trip_id 
-                ORDER BY stop_sequence ASC LIMIT 1
-            ),
-            end_stop_id = (
-                SELECT stop_id FROM stop_times 
-                WHERE trip_id = trips.trip_id 
-                ORDER BY stop_sequence DESC LIMIT 1
-            )
-        `);
-        updateTripStops.run();
+        for (const [tripId, bound] of tripBoundsMap.entries()) {
+            updateTripInfo.run({
+                tripId,
+                startTime: bound.minTime,
+                endTime: bound.maxTime,
+                startStopId: bound.firstStopId,
+                endStopId: bound.lastStopId,
+            });
+        }
 
         // COMMIT the huge transaction
         db.exec('COMMIT');
