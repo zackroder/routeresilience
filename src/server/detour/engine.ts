@@ -30,6 +30,7 @@ export interface ModifiedTrip {
     directionId: number;
     serviceId: string;
     modifiedStopTimes: ModifiedStopTime[];
+    skippedStops: { stopId: string; stopSequence: number }[];
     detourId: string;
 }
 
@@ -158,6 +159,7 @@ export class DetourEngine {
         if ((detour.startStopId && startIdx === -1) || (detour.endStopId && endIdx === -1) || (startIdx !== -1 && endIdx !== originalStopTimes.length && startIdx >= endIdx)) return null;
 
         const modifiedStopTimes: ModifiedStopTime[] = [];
+        const skippedStops: { stopId: string; stopSequence: number }[] = [];
         let seq = 1;
 
         // Part 1: Original stops before & including the diverge point
@@ -175,6 +177,17 @@ export class DetourEngine {
                     lon: stop?.stop_lon || 0,
                     isTemporary: false,
                     isReplacement: false,
+                });
+            }
+        }
+
+        // Part 1b: Skipped original stops between diverge point and rejoin point
+        if (startIdx !== -1 && endIdx > startIdx + 1) {
+            for (let i = startIdx + 1; i < endIdx; i++) {
+                const st = originalStopTimes[i];
+                skippedStops.push({
+                    stopId: st.stop_id,
+                    stopSequence: st.stop_sequence,
                 });
             }
         }
@@ -250,6 +263,7 @@ export class DetourEngine {
             directionId: trip.direction_id,
             serviceId: trip.service_id,
             modifiedStopTimes,
+            skippedStops,
             detourId: detour.id,
         };
     }

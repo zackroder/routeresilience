@@ -173,6 +173,26 @@ export class FeedGenerator {
             const trip = this.repo.getTrip(tripId);
             if (!trip) continue;
 
+            const stopTimeUpdates: any[] = modTrip.modifiedStopTimes.map(ms => ({
+                stopSequence: ms.stopSequence,
+                stopId: ms.stopId,
+                // #4: use pre-computed midnightEpoch instead of flawed inline formula
+                arrival: { time: midnightEpoch + ms.arrivalTime },
+                departure: { time: midnightEpoch + ms.departureTime },
+                scheduleRelationship: 0, // SCHEDULED
+            }));
+
+            // Include explicit SKIPPED stopTimeUpdates for all bypassed original stops
+            if (modTrip.skippedStops && modTrip.skippedStops.length > 0) {
+                for (const skipped of modTrip.skippedStops) {
+                    stopTimeUpdates.push({
+                        stopSequence: skipped.stopSequence,
+                        stopId: skipped.stopId,
+                        scheduleRelationship: 1, // SKIPPED
+                    });
+                }
+            }
+
             entities.push({
                 id: String(entityId++),
                 tripUpdate: {
@@ -187,14 +207,7 @@ export class FeedGenerator {
                             affectedTripId: tripId,
                         }
                     },
-                    stopTimeUpdate: modTrip.modifiedStopTimes.map(ms => ({
-                        stopSequence: ms.stopSequence,
-                        stopId: ms.stopId,
-                        // #4: use pre-computed midnightEpoch instead of flawed inline formula
-                        arrival: { time: midnightEpoch + ms.arrivalTime },
-                        departure: { time: midnightEpoch + ms.departureTime },
-                        scheduleRelationship: 0,
-                    })),
+                    stopTimeUpdate: stopTimeUpdates,
                     timestamp: nowEpoch,
                 },
             });
