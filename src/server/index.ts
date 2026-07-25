@@ -53,6 +53,11 @@ async function main() {
     const clientPath = path.resolve(process.cwd(), 'dist', 'client');
     app.use(express.static(clientPath));
 
+    app.get('/gtfs.zip', (_req, res) => {
+        const zipPath = path.resolve(process.cwd(), 'data', 'google_transit.zip');
+        res.sendFile(zipPath);
+    });
+
     app.get('*', (req, res) => {
         res.sendFile(path.join(clientPath, 'index.html'));
     });
@@ -61,7 +66,8 @@ async function main() {
     httpServer.listen(PORT, '0.0.0.0', () => {
         console.log(`\n✅ Server ready at http://localhost:${PORT}`);
         console.log(`   - API: http://localhost:${PORT}/api`);
-        console.log(`   - GTFS-RT: http://localhost:${PORT}/api/gtfs-rt`);
+        console.log(`   - GTFS Static: http://localhost:${PORT}/api/gtfs/zip (or /gtfs.zip)`);
+        console.log(`   - GTFS-RT Feed: http://localhost:${PORT}/api/gtfs-rt`);
     });
 
     // Graceful shutdown
