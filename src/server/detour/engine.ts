@@ -170,7 +170,7 @@ export class DetourEngine {
                 modifiedStopTimes.push({
                     stopId: st.stop_id,
                     stopName: stop?.stop_name || st.stop_id,
-                    stopSequence: seq++,
+                    stopSequence: st.stop_sequence,
                     arrivalTime: st.arrival_time,
                     departureTime: st.departure_time,
                     lat: stop?.stop_lat || 0,
@@ -246,7 +246,7 @@ export class DetourEngine {
                 modifiedStopTimes.push({
                     stopId: st.stop_id,
                     stopName: stop?.stop_name || st.stop_id,
-                    stopSequence: seq++,
+                    stopSequence: st.stop_sequence,
                     arrivalTime: st.arrival_time + detourTimeShift,
                     departureTime: st.departure_time + detourTimeShift,
                     lat: stop?.stop_lat || 0,

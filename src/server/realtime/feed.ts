@@ -81,9 +81,13 @@ export class FeedGenerator {
 
         // ─── 1. Vehicle Position entities for ALL tracked vehicles ───
         const vehicles = this.vehicleSource.getVehicles();
+        const tripToVehicleMap = new Map<string, string>();
+
         for (const vehicle of vehicles) {
             // Skip cancelled trips
             if (this.cancellationStore.isCancelled(vehicle.tripId, dateStr)) continue;
+
+            tripToVehicleMap.set(vehicle.tripId, vehicle.vehicleId);
 
             entities.push({
                 id: String(entityId++),
@@ -107,7 +111,7 @@ export class FeedGenerator {
                     },
                     currentStopSequence: vehicle.currentStopIndex + 1,
                     stopId: vehicle.nextStopId,
-                    currentStatus: vehicle.status === 'AT_STOP' ? 1 : 2, // STOPPED_AT or IN_TRANSIT_TO
+                    currentStatus: vehicle.status === 'AT_STOP' ? 1 : 2, // STOPPED_AT or IN_TRANSIT_TO,
                     congestionLevel: vehicle.congestionLevel,
                     occupancyStatus: vehicle.occupancyStatus,
                     timestamp: Math.floor(vehicle.lastUpdateTime / 1000),
@@ -119,6 +123,9 @@ export class FeedGenerator {
         const activeTrips = this.repo.getActiveTrips(dateStr, nowSeconds);
 
         for (const trip of activeTrips) {
+            const vehicleId = tripToVehicleMap.get(trip.trip_id);
+            const vehicleDescriptor = vehicleId ? { id: vehicleId, label: `Bus ${vehicleId}` } : undefined;
+
             // Handle cancelled trips
             if (this.cancellationStore.isCancelled(trip.trip_id, dateStr)) {
                 entities.push({
@@ -131,6 +138,7 @@ export class FeedGenerator {
                             startDate: dateStr,
                             scheduleRelationship: 3, // CANCELED
                         },
+                        ...(vehicleDescriptor ? { vehicle: vehicleDescriptor } : {}),
                         timestamp: nowEpoch,
                     },
                 });
@@ -156,6 +164,7 @@ export class FeedGenerator {
                         startDate: dateStr,
                         scheduleRelationship: 0, // SCHEDULED
                     },
+                    ...(vehicleDescriptor ? { vehicle: vehicleDescriptor } : {}),
                     stopTimeUpdate: prediction.predictions.map(p => ({
                         stopSequence: p.stopSequence,
                         stopId: p.stopId,
@@ -172,6 +181,9 @@ export class FeedGenerator {
         for (const [tripId, modTrip] of modifiedTrips) {
             const trip = this.repo.getTrip(tripId);
             if (!trip) continue;
+
+            const vehicleId = tripToVehicleMap.get(tripId);
+            const vehicleDescriptor = vehicleId ? { id: vehicleId, label: `Bus ${vehicleId}` } : undefined;
 
             const stopTimeUpdates: any[] = modTrip.modifiedStopTimes.map(ms => ({
                 stopSequence: ms.stopSequence,
@@ -207,6 +219,7 @@ export class FeedGenerator {
                             affectedTripId: tripId,
                         }
                     },
+                    ...(vehicleDescriptor ? { vehicle: vehicleDescriptor } : {}),
                     stopTimeUpdate: stopTimeUpdates,
                     timestamp: nowEpoch,
                 },
