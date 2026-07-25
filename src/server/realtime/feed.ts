@@ -213,7 +213,7 @@ export class FeedGenerator {
                         routeId: trip.route_id,
                         directionId: trip.direction_id,
                         startDate: dateStr,
-                        scheduleRelationship: 5, // REPLACEMENT
+                        scheduleRelationship: 0, // SCHEDULED
                         modifiedTrip: {
                             modificationsId: `tm_${modTrip.detourId}`,
                             affectedTripId: tripId,
