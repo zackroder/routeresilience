@@ -275,24 +275,7 @@ export class FeedGenerator {
                 },
             });
 
-            // ─── 6. Stop entities for temporary stops ───
-            for (const rs of detour.replacementStops) {
-                if (rs.isTemporary) {
-                    entities.push({
-                        id: `stop_${rs.stopId}`,
-                        stop: {
-                            stopId: rs.stopId,
-                            stopName: {
-                                translation: [{ text: rs.stopName, language: 'en' }],
-                            },
-                            stopLat: rs.lat,
-                            stopLon: rs.lon,
-                        },
-                    });
-                }
-            }
-
-            // ─── 7. ServiceAlert entity for the detour ───
+            // ─── 6. ServiceAlert entity for the detour ───
             entities.push({
                 id: serviceAlertId,
                 alert: {

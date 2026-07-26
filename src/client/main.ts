@@ -35,10 +35,8 @@ let detourPathPoints: [number, number][] = [];
 let replacementStops: {
     stopId: string; stopName: string;
     lat: number; lon: number;
-    isTemporary: boolean; travelTimeFromPrevious: number;
+    travelTimeFromPrevious: number;
 }[] = [];
-let tempStopCounter = 0;
-let pendingTempStopLatLng: [number, number] | null = null;
 
 // Vehicle display
 let showVehicles = false;
@@ -635,9 +633,7 @@ async function finalizeRejoinStop(stop: StopInfo) {
 }
 
 async function onMapClick(e: any) {
-    if (detourStep === 'add-stops') {
-        showTempStopPopup(e.latlng.lat, e.latlng.lng);
-    } else if (detourStep === 'trace-path') {
+    if (detourStep === 'trace-path') {
         const lat = e.latlng.lat;
         const lng = e.latlng.lng;
 
@@ -779,7 +775,7 @@ async function snapToRoad(lat1: number, lon1: number, lat2: number, lon2: number
     return [];
 }
 
-function addReplacementStop(stopId: string, name: string, lat: number, lon: number, isTemporary: boolean) {
+function addReplacementStop(stopId: string, name: string, lat: number, lon: number) {
     // Toggle: if stop already exists, remove it instead of adding a duplicate
     const existingIdx = replacementStops.findIndex(s => s.stopId === stopId);
     if (existingIdx !== -1) {
@@ -835,22 +831,21 @@ function addReplacementStop(stopId: string, name: string, lat: number, lon: numb
         stopId,
         stopName: name,
         lat, lon,
-        isTemporary,
         travelTimeFromPrevious: travelTime,
     });
 
     // Add marker
     const marker = L.circleMarker([lat, lon], {
         radius: 7,
-        fillColor: isTemporary ? '#f59e0b' : '#3b82f6',
+        fillColor: '#3b82f6',
         color: '#ffffff',
         weight: 2,
         fillOpacity: 1,
-    }).bindTooltip(name + (isTemporary ? ' (temp)' : ''), { direction: 'top' });
+    }).bindTooltip(name, { direction: 'top' });
 
     marker.on('click', (e: any) => {
         L.DomEvent.stopPropagation(e);
-        addReplacementStop(stopId, name, lat, lon, isTemporary);
+        addReplacementStop(stopId, name, lat, lon);
     });
 
     marker.addTo(replacementStopsLayer);
@@ -858,67 +853,20 @@ function addReplacementStop(stopId: string, name: string, lat: number, lon: numb
     renderReplacementStopsList();
 }
 
-/**
- * Show a non-blocking Leaflet popup for creating a temporary stop.
- */
-function showTempStopPopup(lat: number, lng: number) {
-    const popup = L.popup({
-        closeButton: true,
-        className: 'temp-stop-popup',
-        maxWidth: 240,
-    })
-        .setLatLng([lat, lng])
-        .setContent(`
-        <div class="temp-stop-form">
-            <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text-primary)">Create Temporary Stop</div>
-            <input type="text" id="temp-stop-name-input" placeholder="Stop name"
-                   style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-surface);color:var(--text-primary);font-family:var(--font-family);font-size:12px;margin-bottom:6px;box-sizing:border-box" />
-            <div style="display:flex;gap:4px">
-                <button id="temp-stop-confirm-btn" class="btn btn-primary btn-sm" style="flex:1">Add Stop</button>
-                <button id="temp-stop-cancel-btn" class="btn btn-secondary btn-sm" style="flex:1">Cancel</button>
-            </div>
-        </div>
-    `)
-        .openOn(map);
-
-    setTimeout(() => {
-        const nameInput = document.getElementById('temp-stop-name-input') as HTMLInputElement;
-        const confirmBtn = document.getElementById('temp-stop-confirm-btn');
-        const cancelBtn = document.getElementById('temp-stop-cancel-btn');
-
-        if (nameInput) nameInput.focus();
-
-        confirmBtn?.addEventListener('click', () => {
-            const name = nameInput?.value.trim() || `Temp Stop ${++tempStopCounter}`;
-            const stopId = `temp_${Date.now()}`;
-            addReplacementStop(stopId, name, lat, lng, true);
-            map.closePopup(popup);
-        });
-
-        cancelBtn?.addEventListener('click', () => {
-            map.closePopup(popup);
-        });
-
-        nameInput?.addEventListener('keydown', (e: KeyboardEvent) => {
-            if (e.key === 'Enter') confirmBtn?.click();
-        });
-    }, 50);
-}
-
 function rebuildReplacementStopMarkers() {
     replacementStopsLayer.clearLayers();
     for (const s of replacementStops) {
         const marker = L.circleMarker([s.lat, s.lon], {
             radius: 7,
-            fillColor: s.isTemporary ? '#f59e0b' : '#3b82f6',
+            fillColor: '#3b82f6',
             color: '#ffffff',
             weight: 2,
             fillOpacity: 1,
-        }).bindTooltip(s.stopName + (s.isTemporary ? ' (temp)' : ''), { direction: 'top' });
+        }).bindTooltip(s.stopName, { direction: 'top' });
 
         marker.on('click', (e: any) => {
             L.DomEvent.stopPropagation(e);
-            addReplacementStop(s.stopId, s.stopName, s.lat, s.lon, s.isTemporary);
+            addReplacementStop(s.stopId, s.stopName, s.lat, s.lon);
         });
 
         marker.addTo(replacementStopsLayer);
@@ -931,7 +879,7 @@ function renderReplacementStopsList() {
 
     container.innerHTML = replacementStops.map((rs, i) => `
     <div class="replacement-stop-item">
-      <span class="stop-icon ${rs.isTemporary ? '' : 'existing'}"></span>
+      <span class="stop-icon existing"></span>
       <span class="stop-name">${rs.stopName}</span>
       <button class="stop-remove" data-index="${i}" title="Remove">✕</button>
     </div>
@@ -1670,9 +1618,9 @@ function addDetourOverlayToLayer(d: DetourData, layer: any) {
 
     for (const rs of d.replacementStops || []) {
         L.circleMarker([rs.lat, rs.lon], {
-            radius: 6, fillColor: rs.isTemporary ? '#f59e0b' : '#3b82f6',
+            radius: 6, fillColor: '#3b82f6',
             color: '#fff', weight: 1.5, fillOpacity: 0.9
-        }).bindTooltip(rs.stopName + (rs.isTemporary ? ' (temp)' : ''), { direction: 'top' })
+        }).bindTooltip(rs.stopName, { direction: 'top' })
             .addTo(layer);
     }
 }
@@ -1747,7 +1695,7 @@ async function loadDetourDetails(detourId: string, detours: DetourData[]) {
     if (detour.replacementStops && detour.replacementStops.length > 0) {
         html += '<div class="detail-section"><strong>Replacement Stops:</strong></div>';
         for (const rs of detour.replacementStops) {
-            html += `<div class="detail-stop">${rs.isTemporary ? '🟡' : '🔵'} ${rs.stopName}${rs.isTemporary ? ' (temp)' : ''}</div>`;
+            html += `<div class="detail-stop">🔵 ${rs.stopName}</div>`;
         }
     }
 

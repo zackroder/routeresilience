@@ -20,7 +20,6 @@ export interface ModifiedStopTime {
     departureTime: number;  // seconds since midnight
     lat: number;
     lon: number;
-    isTemporary: boolean;
     isReplacement: boolean; // true if this is a replacement stop in the detour segment
 }
 
@@ -175,7 +174,6 @@ export class DetourEngine {
                     departureTime: st.departure_time,
                     lat: stop?.stop_lat || 0,
                     lon: stop?.stop_lon || 0,
-                    isTemporary: false,
                     isReplacement: false,
                 });
             }
@@ -211,7 +209,6 @@ export class DetourEngine {
                 departureTime: currentTime + dwellTime,
                 lat: rs.lat,
                 lon: rs.lon,
-                isTemporary: rs.isTemporary,
                 isReplacement: true,
             });
             currentTime += dwellTime;
@@ -251,7 +248,6 @@ export class DetourEngine {
                     departureTime: st.departure_time + detourTimeShift,
                     lat: stop?.stop_lat || 0,
                     lon: stop?.stop_lon || 0,
-                    isTemporary: false,
                     isReplacement: false,
                 });
             }

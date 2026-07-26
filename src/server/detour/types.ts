@@ -1,13 +1,11 @@
 // ─── Detour Data Model ───
 
 export interface ReplacementStopDef {
-    /** Existing stop_id from GTFS, or a generated temp stop_id (prefixed "temp_") */
+    /** Existing stop_id from GTFS static */
     stopId: string;
     stopName: string;
     lat: number;
     lon: number;
-    /** Whether this is a newly created temporary stop (not in GTFS static) */
-    isTemporary: boolean;
     /** Estimated travel time in seconds from previous stop (or from diverge point for first) */
     travelTimeFromPrevious: number;
     /** Optional dwell time in seconds at this stop (default 30) */
