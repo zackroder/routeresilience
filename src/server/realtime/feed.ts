@@ -81,9 +81,13 @@ export class FeedGenerator {
 
         // ─── 1. Vehicle Position entities for ALL tracked vehicles ───
         const vehicles = this.vehicleSource.getVehicles();
+        const tripToVehicleMap = new Map<string, string>();
+
         for (const vehicle of vehicles) {
             // Skip cancelled trips
             if (this.cancellationStore.isCancelled(vehicle.tripId, dateStr)) continue;
+
+            tripToVehicleMap.set(vehicle.tripId, vehicle.vehicleId);
 
             entities.push({
                 id: String(entityId++),
@@ -107,7 +111,7 @@ export class FeedGenerator {
                     },
                     currentStopSequence: vehicle.currentStopIndex + 1,
                     stopId: vehicle.nextStopId,
-                    currentStatus: vehicle.status === 'AT_STOP' ? 1 : 2, // STOPPED_AT or IN_TRANSIT_TO
+                    currentStatus: vehicle.status === 'AT_STOP' ? 1 : 2, // STOPPED_AT or IN_TRANSIT_TO,
                     congestionLevel: vehicle.congestionLevel,
                     occupancyStatus: vehicle.occupancyStatus,
                     timestamp: Math.floor(vehicle.lastUpdateTime / 1000),
@@ -115,12 +119,15 @@ export class FeedGenerator {
             });
         }
 
-        // ─── 2. TripUpdate entities for ALL active trips ───
+        // ─── 2. TripUpdate entities for ALL active trips with live vehicles ───
         const activeTrips = this.repo.getActiveTrips(dateStr, nowSeconds);
 
         for (const trip of activeTrips) {
             // Handle cancelled trips
             if (this.cancellationStore.isCancelled(trip.trip_id, dateStr)) {
+                const vehicleId = tripToVehicleMap.get(trip.trip_id);
+                const vehicleDescriptor = vehicleId ? { id: vehicleId, label: `Bus ${vehicleId}` } : undefined;
+
                 entities.push({
                     id: String(entityId++),
                     tripUpdate: {
@@ -131,11 +138,17 @@ export class FeedGenerator {
                             startDate: dateStr,
                             scheduleRelationship: 3, // CANCELED
                         },
+                        ...(vehicleDescriptor ? { vehicle: vehicleDescriptor } : {}),
                         timestamp: nowEpoch,
                     },
                 });
                 continue;
             }
+
+            // Only generate real-time predictions for trips actively tracked by vehicleSource
+            const vehicleId = tripToVehicleMap.get(trip.trip_id);
+            if (!vehicleId) continue;
+            const vehicleDescriptor = { id: vehicleId, label: `Bus ${vehicleId}` };
 
             // If trip is modified, it's handled in the modified section
             if (modifiedTrips.has(trip.trip_id)) continue;
@@ -156,6 +169,7 @@ export class FeedGenerator {
                         startDate: dateStr,
                         scheduleRelationship: 0, // SCHEDULED
                     },
+                    vehicle: vehicleDescriptor,
                     stopTimeUpdate: prediction.predictions.map(p => ({
                         stopSequence: p.stopSequence,
                         stopId: p.stopId,
@@ -168,10 +182,40 @@ export class FeedGenerator {
             });
         }
 
-        // ─── 3. TripUpdate entities for MODIFIED trips (detoured) ───
+        // ─── 3. TripUpdate entities for MODIFIED trips (detoured) with live vehicles ───
         for (const [tripId, modTrip] of modifiedTrips) {
             const trip = this.repo.getTrip(tripId);
             if (!trip) continue;
+
+            // Only generate real-time predictions for detoured trips actively tracked by vehicleSource
+            const vehicleId = tripToVehicleMap.get(tripId);
+            if (!vehicleId) continue;
+            const vehicleDescriptor = { id: vehicleId, label: `Bus ${vehicleId}` };
+
+            const stopTimeUpdates: any[] = modTrip.modifiedStopTimes
+                .filter(ms => !ms.isReplacement)
+                .map(ms => ({
+                    stopSequence: ms.stopSequence,
+                    stopId: ms.stopId,
+                    // #4: use pre-computed midnightEpoch instead of flawed inline formula
+                    arrival: { time: midnightEpoch + ms.arrivalTime },
+                    departure: { time: midnightEpoch + ms.departureTime },
+                    scheduleRelationship: 0, // SCHEDULED
+                }));
+
+            // Include explicit SKIPPED stopTimeUpdates for all bypassed original stops
+            if (modTrip.skippedStops && modTrip.skippedStops.length > 0) {
+                for (const skipped of modTrip.skippedStops) {
+                    stopTimeUpdates.push({
+                        stopSequence: skipped.stopSequence,
+                        stopId: skipped.stopId,
+                        scheduleRelationship: 1, // SKIPPED
+                    });
+                }
+            }
+
+            // Fix E002: Ensure stopTimeUpdates are strictly sorted ascending by stopSequence
+            stopTimeUpdates.sort((a, b) => a.stopSequence - b.stopSequence);
 
             entities.push({
                 id: String(entityId++),
@@ -181,20 +225,14 @@ export class FeedGenerator {
                         routeId: trip.route_id,
                         directionId: trip.direction_id,
                         startDate: dateStr,
-                        scheduleRelationship: 5, // REPLACEMENT
+                        scheduleRelationship: 0, // SCHEDULED
                         modifiedTrip: {
                             modificationsId: `tm_${modTrip.detourId}`,
                             affectedTripId: tripId,
                         }
                     },
-                    stopTimeUpdate: modTrip.modifiedStopTimes.map(ms => ({
-                        stopSequence: ms.stopSequence,
-                        stopId: ms.stopId,
-                        // #4: use pre-computed midnightEpoch instead of flawed inline formula
-                        arrival: { time: midnightEpoch + ms.arrivalTime },
-                        departure: { time: midnightEpoch + ms.departureTime },
-                        scheduleRelationship: 0,
-                    })),
+                    vehicle: vehicleDescriptor,
+                    stopTimeUpdate: stopTimeUpdates,
                     timestamp: nowEpoch,
                 },
             });
@@ -203,30 +241,30 @@ export class FeedGenerator {
         // ─── 4. TripModifications entities for active detours ───
         for (const detour of activeDetours) {
             const affectedTripIds = this.detourEngine.getAffectedTripIds(detour, dateStr);
-            if (affectedTripIds.length === 0) continue;
-
             const detourShapeId = `detour_${detour.id}`;
             const serviceAlertId = `alert_${detour.id}`;
 
-            entities.push({
-                id: `tm_${detour.id}`,
-                tripModifications: {
-                    selectedTrips: [{
-                        tripIds: affectedTripIds,
-                        shapeId: detourShapeId,
-                    }],
-                    modifications: [{
-                        ...(detour.startStopId ? { startStopSelector: { stopId: detour.startStopId } } : {}),
-                        ...(detour.endStopId ? { endStopSelector: { stopId: detour.endStopId } } : {}),
-                        propagatedModificationDelay: 0,
-                        replacementStops: detour.replacementStops.map(rs => ({
-                            stopId: rs.stopId,
-                            travelTimeToStop: rs.travelTimeFromPrevious,
-                        })),
-                        serviceAlertId: serviceAlertId,
-                    }],
-                },
-            });
+            if (affectedTripIds.length > 0) {
+                entities.push({
+                    id: `tm_${detour.id}`,
+                    tripModifications: {
+                        selectedTrips: [{
+                            tripIds: affectedTripIds,
+                            shapeId: detourShapeId,
+                        }],
+                        modifications: [{
+                            ...(detour.startStopId ? { startStopSelector: { stopId: detour.startStopId } } : {}),
+                            ...(detour.endStopId ? { endStopSelector: { stopId: detour.endStopId } } : {}),
+                            propagatedModificationDelay: 0,
+                            replacementStops: detour.replacementStops.map(rs => ({
+                                stopId: rs.stopId,
+                                travelTimeToStop: rs.travelTimeFromPrevious,
+                            })),
+                            serviceAlertId: serviceAlertId,
+                        }],
+                    },
+                });
+            }
 
             // ─── 5. Shape entity for the detour geometry ───
             entities.push({
@@ -237,24 +275,7 @@ export class FeedGenerator {
                 },
             });
 
-            // ─── 6. Stop entities for temporary stops ───
-            for (const rs of detour.replacementStops) {
-                if (rs.isTemporary) {
-                    entities.push({
-                        id: `stop_${rs.stopId}`,
-                        stop: {
-                            stopId: rs.stopId,
-                            stopName: {
-                                translation: [{ text: rs.stopName, language: 'en' }],
-                            },
-                            stopLat: rs.lat,
-                            stopLon: rs.lon,
-                        },
-                    });
-                }
-            }
-
-            // ─── 7. ServiceAlert entity for the detour ───
+            // ─── 6. ServiceAlert entity for the detour ───
             entities.push({
                 id: serviceAlertId,
                 alert: {

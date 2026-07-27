@@ -20,7 +20,6 @@ export interface ModifiedStopTime {
     departureTime: number;  // seconds since midnight
     lat: number;
     lon: number;
-    isTemporary: boolean;
     isReplacement: boolean; // true if this is a replacement stop in the detour segment
 }
 
@@ -30,6 +29,7 @@ export interface ModifiedTrip {
     directionId: number;
     serviceId: string;
     modifiedStopTimes: ModifiedStopTime[];
+    skippedStops: { stopId: string; stopSequence: number }[];
     detourId: string;
 }
 
@@ -158,6 +158,7 @@ export class DetourEngine {
         if ((detour.startStopId && startIdx === -1) || (detour.endStopId && endIdx === -1) || (startIdx !== -1 && endIdx !== originalStopTimes.length && startIdx >= endIdx)) return null;
 
         const modifiedStopTimes: ModifiedStopTime[] = [];
+        const skippedStops: { stopId: string; stopSequence: number }[] = [];
         let seq = 1;
 
         // Part 1: Original stops before & including the diverge point
@@ -168,13 +169,23 @@ export class DetourEngine {
                 modifiedStopTimes.push({
                     stopId: st.stop_id,
                     stopName: stop?.stop_name || st.stop_id,
-                    stopSequence: seq++,
+                    stopSequence: st.stop_sequence,
                     arrivalTime: st.arrival_time,
                     departureTime: st.departure_time,
                     lat: stop?.stop_lat || 0,
                     lon: stop?.stop_lon || 0,
-                    isTemporary: false,
                     isReplacement: false,
+                });
+            }
+        }
+
+        // Part 1b: Skipped original stops between diverge point and rejoin point
+        if (startIdx !== -1 && endIdx > startIdx + 1) {
+            for (let i = startIdx + 1; i < endIdx; i++) {
+                const st = originalStopTimes[i];
+                skippedStops.push({
+                    stopId: st.stop_id,
+                    stopSequence: st.stop_sequence,
                 });
             }
         }
@@ -189,26 +200,42 @@ export class DetourEngine {
 
         for (const rs of detour.replacementStops) {
             currentTime += rs.travelTimeFromPrevious;
+            const dwellTime = rs.dwellTime ?? 30; // configurable dwell time
             modifiedStopTimes.push({
                 stopId: rs.stopId,
                 stopName: rs.stopName,
                 stopSequence: seq++,
                 arrivalTime: currentTime,
-                departureTime: currentTime + 30, // 30-second dwell
+                departureTime: currentTime + dwellTime,
                 lat: rs.lat,
                 lon: rs.lon,
-                isTemporary: rs.isTemporary,
                 isReplacement: true,
             });
-            currentTime += 30; // dwell time
+            currentTime += dwellTime;
         }
 
         // Part 3: Original stops from rejoin point onward
         if (endIdx !== originalStopTimes.length) {
             const originalRejoinArrival = originalStopTimes[endIdx].arrival_time;
-            const detourTimeShift = currentTime + (detour.replacementStops.length > 0
-                ? 60  // 60s travel from last replacement stop to rejoin
-                : 0) - originalRejoinArrival;
+            
+            const assumedSpeed = detour.assumedSpeedMps || 5.5;
+            let finalLegTravelTime = 0;
+            
+            if (detour.replacementStops.length > 0) {
+                const lastRs = detour.replacementStops[detour.replacementStops.length - 1];
+                const remainingDist = this.getRemainingPolylineDistance(detour.detourShape, lastRs.lat, lastRs.lon);
+                finalLegTravelTime = Math.round(remainingDist / assumedSpeed);
+            } else if (startIdx !== -1) {
+                // If no replacement stops, travel from diverge to rejoin
+                const divergeSt = originalStopTimes[startIdx];
+                const stop = this.repo.getStop(divergeSt.stop_id);
+                if (stop) {
+                    const remainingDist = this.getRemainingPolylineDistance(detour.detourShape, stop.stop_lat, stop.stop_lon);
+                    finalLegTravelTime = Math.round(remainingDist / assumedSpeed);
+                }
+            }
+
+            const detourTimeShift = currentTime + finalLegTravelTime - originalRejoinArrival;
 
             for (let i = endIdx; i < originalStopTimes.length; i++) {
                 const st = originalStopTimes[i];
@@ -216,12 +243,11 @@ export class DetourEngine {
                 modifiedStopTimes.push({
                     stopId: st.stop_id,
                     stopName: stop?.stop_name || st.stop_id,
-                    stopSequence: seq++,
+                    stopSequence: st.stop_sequence,
                     arrivalTime: st.arrival_time + detourTimeShift,
                     departureTime: st.departure_time + detourTimeShift,
                     lat: stop?.stop_lat || 0,
                     lon: stop?.stop_lon || 0,
-                    isTemporary: false,
                     isReplacement: false,
                 });
             }
@@ -233,6 +259,7 @@ export class DetourEngine {
             directionId: trip.direction_id,
             serviceId: trip.service_id,
             modifiedStopTimes,
+            skippedStops,
             detourId: detour.id,
         };
     }
@@ -269,6 +296,29 @@ export class DetourEngine {
      * Compute a continuous [lat, lon][] path for the entire trip under detour.
      * originalShape[0..diverge] + detourCoords + originalShape[rejoin..end]
      */
+    /**
+     * Get the remaining polyline distance from a given point to the end of the shape.
+     */
+    private getRemainingPolylineDistance(shape: [number, number][], lat: number, lon: number): number {
+        if (shape.length === 0) return 0;
+        
+        let minIdx = 0;
+        let minDist = Infinity;
+        for (let i = 0; i < shape.length; i++) {
+            const d = haversineMeters(lat, lon, shape[i][0], shape[i][1]);
+            if (d < minDist) {
+                minDist = d;
+                minIdx = i;
+            }
+        }
+        
+        let totalDist = 0;
+        for (let i = minIdx; i < shape.length - 1; i++) {
+            totalDist += haversineMeters(shape[i][0], shape[i][1], shape[i+1][0], shape[i+1][1]);
+        }
+        return totalDist;
+    }
+
     private findClosestShapeIndex(points: import('../gtfs/types.js').ShapePoint[], lat: number, lon: number): number {
         let minIdx = -1;
         let minDist = Infinity;

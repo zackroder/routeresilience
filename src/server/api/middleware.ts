@@ -50,8 +50,8 @@ export function apiKeyMiddleware(req: Request, res: Response, next: NextFunction
         return next();
     }
     
-    // Allow public access to status and health endpoints for debugging
-    if (req.path === '/status' || req.path === '/health') {
+    // Allow public access to GTFS-RT feeds, static GTFS zip, status, and health endpoints
+    if (req.path === '/status' || req.path === '/health' || req.path === '/gtfs/zip' || req.path === '/gtfs-rt' || req.path.startsWith('/gtfs-rt/')) {
         return next();
     }
 

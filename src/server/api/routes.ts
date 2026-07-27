@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
 import { GTFSRepository } from '../gtfs/database.js';
 import { haversineMeters } from '../gtfs/loader.js';
 import { DetourEngine } from '../detour/engine.js';
@@ -17,6 +19,16 @@ export function createApiRouter(
     cancellationStore: CancellationStore,
 ): Router {
     const router = Router();
+
+    // ─── GTFS Static Zip Route ───
+    /** Serve GTFS static zip for external validators */
+    router.get('/gtfs/zip', (_req: Request, res: Response) => {
+        const zipPath = path.resolve(process.cwd(), 'data', 'google_transit.zip');
+        if (!fs.existsSync(zipPath)) {
+            return res.status(404).json({ error: 'GTFS static zip file not found' });
+        }
+        res.sendFile(zipPath);
+    });
 
     // ─── Block / Cancellation Routes ───
 

@@ -45,7 +45,6 @@ export interface DetourData {
         stopName: string;
         lat: number;
         lon: number;
-        isTemporary: boolean;
         travelTimeFromPrevious: number;
     }[];
     detourShape: [number, number][];

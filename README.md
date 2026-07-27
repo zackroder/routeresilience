@@ -2,10 +2,12 @@
 
 **Service Management & GTFS-RT Engine**
 
-A specialized dashboard and visualization tool built for transit agencies to manage, plan, and visualize route detours and disruptions.  
+A specialized dashboard and visualization tool built for transit agencies to manage, plan, and visualize bus detours and disruptions.  
 
-Ingests GTFS schedule and geographic data in conjunction with vehicle location feed to provide a real-time, map-based interface for operations teams to dynamically reroute buses and manage stop closures.
+Ingests GTFS schedule and geographic data in conjunction with vehicle location feed to provide a real-time, map-based interface for dynamically creating and distributing an enhanced GTFS-rt feed including TripModification for detours.
 
+
+Experiment in creating intuitive software for documenting and distributing detours using [TripModifications](https://gtfs.org/documentation/realtime/feed-entities/trip-modifications/). 
 ## Features
 
 - **Interactive Map Visualization**: Powered by Leaflet, displaying full route shapes, stops, and active vehicle positions.
@@ -53,7 +55,7 @@ Currently, RouteResilience runs a high-performance, internal simulation engine t
 
 In a true production deployment, the ultimate model is to configure RouteResilience as a **GTFS-RT Middleware Proxy**. Instead of simulating vehicles, the system will ingest the transit agency's raw, upstream GTFS-RT `VehiclePositions` feed. The application will correlate real buses to the static schedule, seamlessly overlay the user-created detours (`TripModifications`), and emit an enhanced, corrected GTFS-RT feed downstream to platforms like Google Maps and Apple Maps.
 
-> **Read the [Production Architecture Design](./ARCHITECTURE.md)** to see how this system scales to handle heavy GTFS-RT ingestion using PostgreSQL (PostGIS), Redis, and decoupled worker tiers.
+See [Production Architecture Design](./ARCHITECTURE.md)
 
 ### 2. Service Management & Headway Adherence
 As a GTFS-RT middleware proxy with real-time knowledge of bus locations and the static schedule, RouteResilience is perfectly positioned to monitor **schedule adherence and headways**. 
@@ -75,20 +77,7 @@ Future updates will include an automated engine that continuously scans the live
 4. **Access the Application**
    Open your browser and navigate to `http://localhost:5173`.
 
-## Deployment (Fly.io)
 
-Because this application relies on a local SQLite database populated by a large GTFS download on startup, deploying to traditional serverless environments is not recommended. 
-
-The easiest and cheapest way to deploy this is using **Fly.io**, which provides a persistent storage volume on their free tier. The repository is pre-configured with a `Dockerfile` and `fly.toml` specifically for this.
-
-1. **Install Flyctl** (The Fly.io CLI tool)
-2. **Login or Sign Up**: `fly auth login`
-3. **Launch the App**: Run `fly launch` in the root directory.
-   - When asked to copy the existing `fly.toml` configuration, type **Yes**.
-   - When asked to tweak settings, you can accept the defaults.
-4. **Deploy**: Run `fly deploy`
-
-Fly.io will automatically provision the 3GB persistent volume mounted at `/app/data`, build the Docker container, and start your live server.
 
 ## API Endpoints
 
@@ -100,6 +89,3 @@ Fly.io will automatically provision the 3GB persistent volume mounted at `/app/d
 - `POST /api/detours` - Create a new detour
 - `GET /api/blocks` - Retrieve block/run assignments for the Gantt viewer
 - `GET /api/cancelled` - Retrieve cancelled trips
-
-## License
-MIT License
