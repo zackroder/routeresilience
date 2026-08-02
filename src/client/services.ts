@@ -261,6 +261,8 @@ export interface HeadwayVehicle {
     headwayBehindSeconds: number | null;
     targetHeadwaySeconds: number;
     headwayStatus: HeadwayStatus;
+    leaderVehicleId: string | null;
+    followerVehicleId: string | null;
 }
 
 export interface HeadwayControlPoint {

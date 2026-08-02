@@ -3585,17 +3585,23 @@ function mergeHeadwayData(d0: HeadwayData, d1: HeadwayData): HeadwayData {
 
 /** Leader = vehicle immediately ahead on the route; follower = immediately behind. */
 function leaderFollower(v: HeadwayVehicle, all: HeadwayVehicle[]): { leader: HeadwayVehicle | null; follower: HeadwayVehicle | null } {
-    let leader: HeadwayVehicle | null = null;
-    let follower: HeadwayVehicle | null = null;
+    // Prefer the server's authoritative pairing (shared control-point ordering);
+    // fall back to progress-based pairing for robustness.
+    const leader = v.leaderVehicleId ? all.find(x => x.vehicleId === v.leaderVehicleId) ?? null : null;
+    const follower = v.followerVehicleId ? all.find(x => x.vehicleId === v.followerVehicleId) ?? null : null;
+    if (leader || follower) return { leader, follower };
+
+    let fbLeader: HeadwayVehicle | null = null;
+    let fbFollower: HeadwayVehicle | null = null;
     for (const other of all) {
         if (other.vehicleId === v.vehicleId) continue;
         if (other.progress > v.progress) {
-            if (!leader || other.progress < leader.progress) leader = other;
+            if (!fbLeader || other.progress < fbLeader.progress) fbLeader = other;
         } else if (other.progress < v.progress) {
-            if (!follower || other.progress > follower.progress) follower = other;
+            if (!fbFollower || other.progress > fbFollower.progress) fbFollower = other;
         }
     }
-    return { leader, follower };
+    return { leader: fbLeader, follower: fbFollower };
 }
 
 function highlightBus(v: HeadwayVehicle) {
