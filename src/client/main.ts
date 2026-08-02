@@ -1,4 +1,4 @@
-import { api, RouteInfo, StopInfo, DetourData, VehicleData, BlockData, BlockTrip, HeadwayData, HeadwayStatus, HeadwayControlPoint, Recommendation, OperatorInstruction } from './services';
+import { api, RouteInfo, StopInfo, DetourData, VehicleData, BlockData, BlockTrip, HeadwayData, HeadwayStatus, HeadwayControlPoint, HeadwayVehicle, Recommendation, OperatorInstruction } from './services';
 
 // ─── Declare Leaflet global from CDN ───
 declare const L: any;
@@ -65,6 +65,8 @@ let headwayTimer: ReturnType<typeof setInterval> | null = null;
 let currentRecommendations: Recommendation[] = [];
 let currentInstructions: OperatorInstruction[] = [];
 const actedRecKeys = new Set<string>();
+let headwayChartItems: { data: HeadwayData; title: string }[] | null = null;
+let headwayResizeTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Detour expansion state
 let expandedDetourIds = new Set<string>();
@@ -3171,6 +3173,34 @@ function setupNavigation() {
         });
     }
 
+    // Re-fit the headway chart when the window resizes
+    window.addEventListener('resize', () => {
+        if (activeView !== 'headways' || !headwayChartItems) return;
+        if (headwayResizeTimer) clearTimeout(headwayResizeTimer);
+        headwayResizeTimer = setTimeout(() => renderHeadwayCharts(headwayChartItems!), 150);
+    });
+
+    // Headway bus hover: highlight leader/follower + show headway tooltip
+    const chartContainer = document.getElementById('headway-chart-container');
+    if (chartContainer) {
+        chartContainer.addEventListener('mouseover', (e) => {
+            const g = (e.target as Element).closest?.('g.headway-bus-group') as SVGElement | null;
+            const vehicleId = g?.getAttribute('data-vehicle');
+            const v = vehicleId ? headwayData?.vehicles.find(x => x.vehicleId === vehicleId) : undefined;
+            if (v) {
+                highlightBus(v);
+                showBusTooltip(v, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+            } else {
+                clearHighlight();
+                hideBusTooltip();
+            }
+        });
+        chartContainer.addEventListener('mouseleave', () => {
+            clearHighlight();
+            hideBusTooltip();
+        });
+    }
+
     // 7. Event Delegation for Block Viewer
     const blockContent = document.getElementById('block-view-content');
     if (blockContent) {
@@ -3234,13 +3264,15 @@ function setupNavigation() {
 // ─── Headways View ───
 
 // Route-strip headway chart geometry
-const STRIP_STOP_W = 96;
-const STRIP_H = 230;
 const STRIP_PAD_L = 30;
 const STRIP_PAD_R = 30;
-const STRIP_BUS_Y = 155;
-const STRIP_LABEL_Y = 205;
+const STRIP_BUS_Y = 150;
+const STRIP_HEADER_Y = 18;
 const STRIP_MAX_STOPS = 24;
+const STRIP_MIN_STOP_W = 44;
+const STRIP_MAX_STOP_W = 150;
+const STRIP_MIN_H = 200;
+const STOP_LABEL_CHAR_W = 5.6;
 
 function ensureHeadwayRouteOptions() {
     const select = document.getElementById('headway-route-select') as HTMLSelectElement | null;
@@ -3289,9 +3321,23 @@ function stopHeadwayPolling() {
 async function refreshHeadways() {
     if (!headwayRouteId) return;
     try {
-        const data = await api.getHeadways(headwayRouteId, headwayDirection === '' ? undefined : Number(headwayDirection));
-        headwayData = data;
-        renderHeadways(data);
+        if (headwayDirection === '') {
+            // All directions: fetch per-direction strips, merge for summary/table
+            const [d0, d1] = await Promise.all([
+                api.getHeadways(headwayRouteId, 0),
+                api.getHeadways(headwayRouteId, 1),
+            ]);
+            const merged = mergeHeadwayData(d0, d1);
+            headwayData = merged;
+            renderHeadways(merged, [
+                { data: d0, title: chartTitle(d0, 0) },
+                { data: d1, title: chartTitle(d1, 1) },
+            ]);
+        } else {
+            const data = await api.getHeadways(headwayRouteId, Number(headwayDirection));
+            headwayData = data;
+            renderHeadways(data);
+        }
     } catch (err) {
         console.error('Failed to load headways:', err);
         const el = document.getElementById('headway-chart-container');
@@ -3321,9 +3367,10 @@ async function refreshInstructions() {
     }
 }
 
-function renderHeadways(data: HeadwayData) {
+function renderHeadways(data: HeadwayData, charts?: { data: HeadwayData; title: string }[]) {
     renderHeadwaySummary(data);
-    renderHeadwayChart(data);
+    headwayChartItems = charts ?? [{ data, title: chartTitle(data) }];
+    renderHeadwayCharts(headwayChartItems);
     renderHeadwayTable(data);
 }
 
@@ -3368,23 +3415,51 @@ function renderHeadwaySummary(data: HeadwayData) {
         </div>`;
 }
 
-function renderHeadwayChart(data: HeadwayData) {
+/** Render one route-strip chart per item (stacked when "All directions" is selected). */
+function renderHeadwayCharts(items: { data: HeadwayData; title: string }[]) {
     const container = document.getElementById('headway-chart-container');
     if (!container) return;
+    const strips = items.map(item => buildHeadwayStrip(item.data, item.title));
+    container.innerHTML = strips.length > 0
+        ? strips.join('')
+        : `<p class="empty-state" style="padding:24px">No data to display</p>`;
+}
+
+/** Build the route-strip SVG for one route/direction. Returns '' when there is nothing to draw. */
+function buildHeadwayStrip(data: HeadwayData, title: string): string {
+    const scrollEl = document.getElementById('headway-scroll');
 
     if (data.controlPoints.length === 0 || data.vehicles.length === 0) {
-        container.innerHTML = `<p class="empty-state" style="padding:24px">${data.warnings.join(' ') || 'No data to display'}</p>`;
-        return;
+        return `<div class="headway-strip-empty">${escapeXml(title)}: no active vehicles</div>`;
     }
 
     // Equally spaced subset of control stops along the x-axis
     const stops = sampleStops(data.controlPoints, STRIP_MAX_STOPS);
     const n = stops.length;
-    const stripLen = (n - 1) * STRIP_STOP_W;
-    const totalW = STRIP_PAD_L + stripLen + STRIP_PAD_R;
+    if (n < 2) {
+        return `<div class="headway-strip-empty">${escapeXml(title)}: not enough control points</div>`;
+    }
+
+    // Scale stop spacing to the window, clamped so labels stay readable.
+    // If even the minimum spacing overflows, the strip scrolls horizontally.
+    const availableW = scrollEl ? Math.max(0, scrollEl.clientWidth - 40) : 0;
+    let stopW = availableW > 0 ? (availableW - STRIP_PAD_L - STRIP_PAD_R) / (n - 1) : STRIP_MAX_STOP_W;
+    stopW = Math.max(STRIP_MIN_STOP_W, Math.min(STRIP_MAX_STOP_W, stopW));
+
+    const rotated = stopW < 70;
+    const padR = rotated ? STRIP_PAD_R + Math.min(220, maxNamePx(stops)) : STRIP_PAD_R;
+    const stripLen = (n - 1) * stopW;
+    const totalW = STRIP_PAD_L + stripLen + padR;
 
     const xOf = (fraction: number) => STRIP_PAD_L + Math.max(0, Math.min(1, fraction)) * stripLen;
     const busY = STRIP_BUS_Y;
+
+    // Labels sweep downward (rotate +35°) so they never cross the route line.
+    const labelY = busY + 34;
+    const labelBottom = rotated
+        ? labelY + Math.min(220, maxNamePx(stops) * 0.58) + 14
+        : labelY + 40;
+    const chartH = Math.max(STRIP_MIN_H, labelBottom);
 
     const statusColor = (s: HeadwayStatus) => {
         switch (s) {
@@ -3396,26 +3471,26 @@ function renderHeadwayChart(data: HeadwayData) {
         }
     };
 
-    const scheduledForFraction = (fraction: number): number | null => {
-        const idx = Math.round(Math.max(0, Math.min(1, fraction)) * (n - 1));
-        return stops[idx]?.scheduledHeadwaySeconds ?? null;
-    };
-
-    let svg = `<svg width="${totalW}" height="${STRIP_H}" class="headway-svg" style="min-width:${totalW}px;min-height:${STRIP_H}px">`;
+    let svg = `<svg width="${totalW}" height="${chartH}" class="headway-svg" style="min-width:${totalW}px;min-height:${chartH}px">`;
 
     // Header
-    svg += `<text x="${STRIP_PAD_L}" y="18" class="headway-axis-time">${data.directionId !== null ? `Direction ${data.directionId}` : 'All directions'} · ${escapeXml(data.route.routeShortName)}</text>`;
+    svg += `<text x="${STRIP_PAD_L}" y="${STRIP_HEADER_Y}" class="headway-axis-time">${escapeXml(title)}</text>`;
 
     // Route line
     svg += `<line x1="${STRIP_PAD_L}" y1="${busY}" x2="${STRIP_PAD_L + stripLen}" y2="${busY}" class="headway-route-line" />`;
 
-    // Stops: ticks + labels below the line
+    // Stops: ticks + full labels below the line
     for (let i = 0; i < n; i++) {
         const x = xOf(i / (n - 1));
         svg += `<line x1="${x}" y1="${busY - 6}" x2="${x}" y2="${busY + 6}" class="headway-stop-tick" />`;
-        const fullName = stops[i].stopName;
-        const name = fullName.length > 12 ? fullName.slice(0, 11) + '…' : fullName;
-        svg += `<text x="${x}" y="${STRIP_LABEL_Y}" text-anchor="middle" class="headway-stop-label">${escapeXml(name)}</text>`;
+        if (rotated) {
+            svg += `<text x="${x}" y="${labelY}" transform="rotate(35 ${x} ${labelY})" class="headway-stop-label headway-stop-label-rotated">${escapeXml(stops[i].stopName)}</text>`;
+        } else {
+            const lines = wrapStopName(stops[i].stopName, stopW - 4);
+            lines.forEach((ln, li) => {
+                svg += `<text x="${x}" y="${labelY + li * 14}" text-anchor="middle" class="headway-stop-label">${escapeXml(ln)}</text>`;
+            });
+        }
     }
 
     // Buses positioned by their progress along the route; scheduled/actual
@@ -3424,26 +3499,163 @@ function renderHeadwayChart(data: HeadwayData) {
         const frac = Math.max(0, Math.min(1, v.progress));
         const x = xOf(frac);
         const color = statusColor(v.headwayStatus);
-        const sched = scheduledForFraction(frac);
+        const sched = scheduledAtFraction(stops, frac);
         const schedStr = sched !== null ? formatDuration(sched) : '—';
         const actualStr = v.headwayAheadSeconds !== null ? formatDuration(v.headwayAheadSeconds) : '—';
 
-        const detail = `Vehicle ${escapeXml(v.vehicleId)}\nTrip ${escapeXml(v.tripId)}\nScheduled headway ${schedStr}\nActual headway ${actualStr}\nStatus ${v.headwayStatus}`;
-
         svg += `<g class="headway-bus-group" data-vehicle="${escapeXml(v.vehicleId)}">
-            <title>${detail}</title>
             <text x="${x}" y="${busY - 38}" text-anchor="middle" class="headway-bus-hw">S ${schedStr}</text>
             <text x="${x}" y="${busY - 24}" text-anchor="middle" class="headway-bus-hw headway-bus-hw-actual">A ${actualStr}</text>
+            <circle cx="${x}" cy="${busY}" r="13" class="headway-bus-ring" style="stroke:${color}" />
             <text x="${x}" y="${busY + 7}" text-anchor="middle" class="headway-bus-icon">🚌</text>
         </g>`;
     }
 
     svg += `</svg>`;
 
-    container.innerHTML = `
+    return `
         <div class="headway-chart-wrap" style="width:${totalW}px">
             ${svg}
         </div>`;
+}
+
+/** Scheduled headway at the sampled stop nearest the given progress fraction. */
+function scheduledAtFraction(stops: HeadwayControlPoint[], fraction: number): number | null {
+    const idx = Math.round(Math.max(0, Math.min(1, fraction)) * (stops.length - 1));
+    return stops[idx]?.scheduledHeadwaySeconds ?? null;
+}
+
+function maxNamePx(stops: HeadwayControlPoint[]): number {
+    return Math.max(0, ...stops.map(s => s.stopName.length * STOP_LABEL_CHAR_W));
+}
+
+/** Wrap a stop name into up to 2 lines that fit the available per-stop width. */
+function wrapStopName(name: string, budgetPx: number): string[] {
+    const maxChars = Math.max(3, Math.floor(budgetPx / STOP_LABEL_CHAR_W));
+    const words = name.split(/\s+/);
+    const lines: string[] = [];
+    let cur = '';
+    for (const w of words) {
+        const test = cur ? `${cur} ${w}` : w;
+        if (test.length <= maxChars || !cur) {
+            cur = test;
+        } else {
+            lines.push(cur);
+            cur = w;
+        }
+        if (lines.length === 1 && cur.length + lines[0].length > maxChars * 2) break;
+    }
+    if (cur) lines.push(cur);
+    return lines.slice(0, 2).map((l, i) => {
+        if (l.length <= maxChars) return l;
+        return l.slice(0, Math.max(3, maxChars - 1)) + '…';
+    });
+}
+
+function chartTitle(data: HeadwayData, dirOverride?: number): string {
+    const dir = dirOverride !== undefined ? dirOverride : data.directionId;
+    const label = dir !== null && dir !== undefined ? dirLabel(data.route.routeId, dir) : 'All directions';
+    return `Route ${data.route.routeShortName} · ${label}`;
+}
+
+function dirLabel(routeId: string, dir: number): string {
+    const route = allRoutes.find(r => r.route_id === routeId);
+    return route?.directions?.[dir] ?? `Direction ${dir}`;
+}
+
+/** Combine per-direction responses for the summary cards + table. */
+function mergeHeadwayData(d0: HeadwayData, d1: HeadwayData): HeadwayData {
+    const vehicles = [...d0.vehicles, ...d1.vehicles];
+    const byStop = new Map<string, HeadwayControlPoint>();
+    for (const cp of [...d0.controlPoints, ...d1.controlPoints]) {
+        const existing = byStop.get(cp.stopId);
+        if (!existing || cp.stopSequence < existing.stopSequence) byStop.set(cp.stopId, cp);
+    }
+    return {
+        route: d0.route,
+        directionId: null,
+        timestamp: Math.max(d0.timestamp, d1.timestamp),
+        date: d0.date,
+        targetHeadwaySeconds: d0.targetHeadwaySeconds > 0 ? d0.targetHeadwaySeconds : d1.targetHeadwaySeconds,
+        vehicles,
+        controlPoints: Array.from(byStop.values()).sort((a, b) => a.stopSequence - b.stopSequence),
+        warnings: [...d0.warnings, ...d1.warnings],
+    };
+}
+
+/** Leader = vehicle immediately ahead on the route; follower = immediately behind. */
+function leaderFollower(v: HeadwayVehicle, all: HeadwayVehicle[]): { leader: HeadwayVehicle | null; follower: HeadwayVehicle | null } {
+    let leader: HeadwayVehicle | null = null;
+    let follower: HeadwayVehicle | null = null;
+    for (const other of all) {
+        if (other.vehicleId === v.vehicleId) continue;
+        if (other.progress > v.progress) {
+            if (!leader || other.progress < leader.progress) leader = other;
+        } else if (other.progress < v.progress) {
+            if (!follower || other.progress > follower.progress) follower = other;
+        }
+    }
+    return { leader, follower };
+}
+
+function highlightBus(v: HeadwayVehicle) {
+    const all = headwayData?.vehicles ?? [];
+    const { leader, follower } = leaderFollower(v, all);
+    const ids = new Set<string>([v.vehicleId, leader?.vehicleId, follower?.vehicleId].filter(Boolean) as string[]);
+    document.querySelector('.headway-chart-wrap')?.classList.add('headway-hovering');
+    document.querySelectorAll('g.headway-bus-group').forEach(g => {
+        const id = g.getAttribute('data-vehicle');
+        g.classList.toggle('highlight', !!id && ids.has(id));
+        g.classList.toggle('highlight-leader', !!id && leader?.vehicleId === id);
+        g.classList.toggle('highlight-follower', !!id && follower?.vehicleId === id);
+    });
+}
+
+function clearHighlight() {
+    document.querySelector('.headway-chart-wrap')?.classList.remove('headway-hovering');
+    document.querySelectorAll('g.headway-bus-group.highlight').forEach(g => {
+        g.classList.remove('highlight', 'highlight-leader', 'highlight-follower');
+    });
+}
+
+function showBusTooltip(v: HeadwayVehicle, clientX: number, clientY: number) {
+    const tl = document.getElementById('headway-bus-tooltip');
+    if (!tl) return;
+    const all = headwayData?.vehicles ?? [];
+    const stops = headwayData ? sampleStops(headwayData.controlPoints, STRIP_MAX_STOPS) : [];
+    const { leader, follower } = leaderFollower(v, all);
+
+    const row = (vehicle: HeadwayVehicle, role: string) => {
+        const observed = role === 'leader' ? vehicle.headwayBehindSeconds : vehicle.headwayAheadSeconds;
+        const sched = scheduledAtFraction(stops, vehicle.progress);
+        return `<div class="hw-tip-row">
+            <span class="hw-tip-role hw-tip-${role}">${role}</span>
+            <span class="hw-tip-vid">${escapeXml(vehicle.vehicleId)}</span>
+            <span class="hw-tip-hw"><span class="hw-tip-label">Obs</span> ${formatDuration(observed)}</span>
+            <span class="hw-tip-hw"><span class="hw-tip-label">Sched</span> ${formatDuration(sched)}</span>
+        </div>`;
+    };
+
+    let html = `<div class="hw-tip-title">Vehicle ${escapeXml(v.vehicleId)} · ${v.headwayStatus}</div>`;
+    html += row(v, 'self');
+    if (leader) html += row(leader, 'leader');
+    if (follower) html += row(follower, 'follower');
+
+    tl.innerHTML = html;
+    tl.style.display = 'block';
+
+    const rect = tl.getBoundingClientRect();
+    let left = clientX + 16;
+    let top = clientY + 16;
+    if (left + rect.width > window.innerWidth) left = clientX - rect.width - 16;
+    if (top + rect.height > window.innerHeight) top = clientY - rect.height - 16;
+    tl.style.left = `${Math.max(4, left)}px`;
+    tl.style.top = `${Math.max(4, top)}px`;
+}
+
+function hideBusTooltip() {
+    const tl = document.getElementById('headway-bus-tooltip');
+    if (tl) tl.style.display = 'none';
 }
 
 /** Evenly spaced subset of control stops so the x-axis stays readable. */

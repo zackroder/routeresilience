@@ -2619,11 +2619,119 @@ body.light-theme .block-label.all-selected {
 }
 
 .headway-bus-icon {
-  font-size: 20px;
+  font-size: 18px;
+  pointer-events: none;
+}
+
+.headway-bus-ring {
+  fill: none;
+  stroke-width: 2;
 }
 
 .headway-bus-group {
   cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.headway-chart-wrap {
+  margin-bottom: 14px;
+}
+
+.headway-chart-wrap.headway-hovering .headway-bus-group {
+  opacity: 0.18;
+}
+
+.headway-chart-wrap.headway-hovering .headway-bus-group.highlight {
+  opacity: 1;
+}
+
+.headway-bus-group.highlight-leader .headway-bus-ring {
+  stroke-width: 4;
+  stroke-dasharray: 4 3;
+}
+
+.headway-bus-group.highlight-follower .headway-bus-ring {
+  stroke-width: 4;
+  stroke-dasharray: 2 4;
+}
+
+.headway-bus-group.highlight .headway-bus-icon {
+  font-size: 24px;
+}
+
+.headway-stop-label-rotated {
+  fill: var(--text-secondary);
+  font-size: 10px;
+}
+
+.headway-strip-empty {
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 18px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+/* Bus hover tooltip */
+.headway-tooltip {
+  position: fixed;
+  z-index: 10000;
+  background: var(--bg-glass);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: var(--shadow-lg);
+  min-width: 220px;
+  pointer-events: none;
+}
+
+.hw-tip-title {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.hw-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.hw-tip-role {
+  width: 58px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 700;
+}
+
+.hw-tip-self { color: var(--accent-blue); }
+.hw-tip-leader { color: var(--accent-green); }
+.hw-tip-follower { color: var(--accent-orange); }
+
+.hw-tip-vid {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.hw-tip-hw {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.hw-tip-label {
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 .headway-table-container {
