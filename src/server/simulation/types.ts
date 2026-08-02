@@ -33,6 +33,9 @@ export interface VehicleState {
     lastUpdateTime: number;    // epoch ms
     dwellEndTime: number;      // epoch ms (when stopped at a stop, when to depart)
 
+    // Service control
+    holdUntilEpochMs?: number; // epoch ms — vehicle is held (frozen) until this time
+
     // Schedule adherence
     delaySeconds: number;      // measured delay: positive = late, negative = early
     lastPredictedArrivalTime?: number; // epoch seconds, for the next stop

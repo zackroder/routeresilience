@@ -490,6 +490,17 @@ export class SimulationEngine implements VehicleDataSource {
                 continue;
             }
 
+            // ─── Service hold (operator hold instruction) ───
+            // Freeze the vehicle in place until the hold expires. Position and
+            // stop progress are unchanged, so predictions naturally extend later.
+            if (vehicle.holdUntilEpochMs !== undefined) {
+                if (now < vehicle.holdUntilEpochMs) {
+                    vehicle.lastUpdateTime = now;
+                    continue;
+                }
+                vehicle.holdUntilEpochMs = undefined;
+            }
+
             // Get the shape this vehicle follows (may be a detour shape)
             let shape = this.getInterpolatedShape(vehicle.shapeId);
             if (!shape) continue;
@@ -661,6 +672,34 @@ export class SimulationEngine implements VehicleDataSource {
 
     getVehicleCount(): number {
         return this.vehicles.size;
+    }
+
+    /**
+     * Apply a service hold to a vehicle: freezes it in place for `seconds`.
+     * No-op if the vehicle is unknown or already completed.
+     */
+    applyHold(vehicleId: string, seconds: number): boolean {
+        const vehicle = this.vehicles.get(vehicleId);
+        if (!vehicle || vehicle.status === 'COMPLETED') return false;
+        vehicle.holdUntilEpochMs = Date.now() + seconds * 1000;
+        return true;
+    }
+
+    /** Release a vehicle from an active hold. */
+    clearHold(vehicleId: string): boolean {
+        const vehicle = this.vehicles.get(vehicleId);
+        if (!vehicle) return false;
+        if (vehicle.holdUntilEpochMs !== undefined) {
+            vehicle.holdUntilEpochMs = undefined;
+            return true;
+        }
+        return false;
+    }
+
+    /** Whether a vehicle is currently being held. */
+    isHeld(vehicleId: string): boolean {
+        const vehicle = this.vehicles.get(vehicleId);
+        return !!vehicle && vehicle.holdUntilEpochMs !== undefined && vehicle.holdUntilEpochMs > Date.now();
     }
 
     private formatDateStr(date: Date): string {
