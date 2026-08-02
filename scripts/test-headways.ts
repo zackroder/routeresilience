@@ -47,9 +47,12 @@ async function main() {
     const res = headwayService.getHeadways(testRouteId, undefined, new Date());
     assert(Array.isArray(res.vehicles), 'response has vehicles array');
     assert(Array.isArray(res.controlPoints), 'response has controlPoints array');
+    assert(Array.isArray(res.topology.branches), 'response has topology.branches');
+    assert(res.topology.trunk.length > 0, `full-route trunk has stops (${res.topology.trunk.length})`);
     assert(res.targetHeadwaySeconds > 0, `target headway positive (${res.targetHeadwaySeconds}s)`);
     assert(typeof res.timestamp === 'number' && res.timestamp > 0, 'response has timestamp');
     for (const v of res.vehicles) {
+        assert(typeof v.axisPosition === 'number' && v.axisPosition >= 0 && v.axisPosition <= 1, 'vehicle has axisPosition in [0,1]');
         assert(typeof v.progress === 'number', 'vehicle has progress');
         assert(typeof v.leaderVehicleId === 'string' || v.leaderVehicleId === null, 'vehicle has leaderVehicleId');
         assert(typeof v.followerVehicleId === 'string' || v.followerVehicleId === null, 'vehicle has followerVehicleId');
@@ -63,6 +66,13 @@ async function main() {
         assert(['UNKNOWN', 'STALE', 'NORMAL', 'BUNCHED', 'GAPPED'].includes(s), `valid headwayStatus (${s})`);
     }
     console.log(`   Statuses observed: ${[...statuses].join(', ') || '(none)'}`);
+    console.log(`   Trunk: ${res.topology.trunk.length} stops, ${res.topology.branches.length} branch(es)`);
+
+    // Topology stability + caching: repeated calls return the same trunk
+    const res2 = headwayService.getHeadways(testRouteId, undefined, new Date());
+    const trunkIds = res.topology.trunk.map(cp => cp.stopId).join('>');
+    const trunkIds2 = res2.topology.trunk.map(cp => cp.stopId).join('>');
+    assert(trunkIds === trunkIds2, 'topology stable across calls (cached)');
 
     // 4. Invalid route
     let threw = false;
