@@ -10,6 +10,8 @@ import { SimulationEngine } from '../simulation/engine.js';
 import { FeedGenerator } from '../realtime/feed.js';
 import { CancellationStore } from '../detour/cancellations.js';
 import { HeadwayService } from '../headway/service.js';
+import { Recommendation } from '../headway/types.js';
+import { InstructionStore } from '../instructions/store.js';
 
 export function createApiRouter(
     repo: GTFSRepository,
@@ -19,6 +21,7 @@ export function createApiRouter(
     feedGenerator: FeedGenerator,
     cancellationStore: CancellationStore,
     headwayService: HeadwayService,
+    instructionStore: InstructionStore,
 ): Router {
     const router = Router();
 
@@ -700,6 +703,121 @@ export function createApiRouter(
             }
             res.status(500).json({ error: (err as Error).message });
         }
+    });
+
+    /** Fresh service-restoration recommendations for a route/direction */
+    router.get('/headways/recommendations', (req: Request, res: Response) => {
+        const routeId = req.query.route_id as string | undefined;
+        if (!routeId) {
+            res.status(400).json({ error: 'route_id query parameter is required' });
+            return;
+        }
+        let directionId: number | undefined;
+        if (req.query.direction !== undefined) {
+            directionId = parseInt(req.query.direction as string, 10);
+            if (isNaN(directionId)) {
+                res.status(400).json({ error: 'direction must be a number' });
+                return;
+            }
+        }
+        try {
+            res.json({
+                timestamp: Date.now(),
+                recommendations: headwayService.getRecommendations(routeId, directionId, new Date()),
+            });
+        } catch (err) {
+            if ((err as Error).message === 'Route not found') {
+                res.status(404).json({ error: 'Route not found' });
+                return;
+            }
+            res.status(500).json({ error: (err as Error).message });
+        }
+    });
+
+    // ─── Service Restoration / Operator Instructions ───
+
+    /** Accept a headway recommendation, creating an operator instruction (SENT). */
+    router.post('/recommendations/accept', (req: Request, res: Response) => {
+        const rec = req.body as Recommendation;
+        if (!rec || rec.action !== 'HOLD' || !rec.vehicleId || !rec.tripId || !rec.controlPointStopId) {
+            res.status(400).json({ error: 'Valid recommendation body required' });
+            return;
+        }
+        const instruction = instructionStore.create({
+            vehicleId: rec.vehicleId,
+            tripId: rec.tripId,
+            routeId: rec.routeId,
+            action: 'HOLD',
+            controlPointStopId: rec.controlPointStopId,
+            controlPointStopName: rec.controlPointStopName || rec.controlPointStopId,
+            holdSeconds: rec.holdSeconds,
+            message: `Hold ${rec.holdSeconds}s at ${rec.controlPointStopName || rec.controlPointStopId} to restore spacing`,
+            source: 'recommendation',
+        });
+        res.status(201).json(instruction);
+    });
+
+    /** Create an operator instruction directly (dispatcher). */
+    router.post('/instructions', (req: Request, res: Response) => {
+        const body = req.body as any;
+        if (!body.vehicleId || body.action !== 'HOLD' || !body.controlPointStopId) {
+            res.status(400).json({ error: 'vehicleId, action (HOLD) and controlPointStopId are required' });
+            return;
+        }
+        const holdSeconds = Number(body.holdSeconds) > 0 ? Number(body.holdSeconds) : 30;
+        const instruction = instructionStore.create({
+            vehicleId: body.vehicleId,
+            tripId: body.tripId || '',
+            routeId: body.routeId || '',
+            action: 'HOLD',
+            controlPointStopId: body.controlPointStopId,
+            controlPointStopName: body.controlPointStopName || body.controlPointStopId,
+            holdSeconds,
+            message: body.message || `Hold ${holdSeconds}s at ${body.controlPointStopName || body.controlPointStopId}`,
+            source: 'dispatcher',
+        });
+        res.status(201).json(instruction);
+    });
+
+    /** List instructions. ?active=true returns only SENT/ACKNOWLEDGED. */
+    router.get('/instructions', (req: Request, res: Response) => {
+        const activeOnly = req.query.active === 'true';
+        res.json(activeOnly ? instructionStore.listActive() : instructionStore.listRecent());
+    });
+
+    /** Operator acknowledges an instruction; HOLD instructions are applied to the simulated vehicle. */
+    router.post('/instructions/:id/acknowledge', (req: Request, res: Response) => {
+        const inst = instructionStore.acknowledge(req.params.id);
+        if (!inst) {
+            res.status(404).json({ error: 'Instruction not found' });
+            return;
+        }
+        if (inst.action === 'HOLD') {
+            simulation.applyHold(inst.vehicleId, inst.holdSeconds);
+        }
+        res.json(inst);
+    });
+
+    /** Operator reports the instruction complete. */
+    router.post('/instructions/:id/complete', (req: Request, res: Response) => {
+        const inst = instructionStore.complete(req.params.id);
+        if (!inst) {
+            res.status(404).json({ error: 'Instruction not found' });
+            return;
+        }
+        simulation.clearHold(inst.vehicleId);
+        res.json(inst);
+    });
+
+    /** Dispatcher cancels an instruction before/while in flight. */
+    router.post('/instructions/:id/cancel', (req: Request, res: Response) => {
+        const inst = instructionStore.cancel(req.params.id);
+        if (!inst) {
+            res.status(404).json({ error: 'Instruction not found' });
+            return;
+        }
+        simulation.clearHold(inst.vehicleId);
+        res.json(inst);
     });
 
     return router;
