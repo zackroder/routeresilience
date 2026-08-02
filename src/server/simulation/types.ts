@@ -34,7 +34,13 @@ export interface VehicleState {
     dwellEndTime: number;      // epoch ms (when stopped at a stop, when to depart)
 
     // Service control
-    holdUntilEpochMs?: number; // epoch ms — vehicle is held (frozen) until this time
+    holdUntilEpochMs?: number;        // epoch ms — hold applies at/from the next stop until this time
+    breakdownUntilEpochMs?: number;   // epoch ms — vehicle is frozen in place until this time
+
+    // Schedule / operational
+    scheduledEndTime: number;         // seconds since midnight of the trip's last scheduled arrival
+    congestionMultiplier?: number;    // current effective congestion multiplier (1 = normal)
+    speedMultiplier?: number;         // deterministic per-vehicle speed override (applied to segment speeds)
 
     // Schedule adherence
     delaySeconds: number;      // measured delay: positive = late, negative = early

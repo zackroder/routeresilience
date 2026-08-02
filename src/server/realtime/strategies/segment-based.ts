@@ -32,6 +32,7 @@ export class SegmentBasedStrategy implements PredictionStrategy {
     ): StopPrediction[] {
         const predictions: StopPrediction[] = [];
         const { segmentSpeeds, segmentDistances, distanceTraveled } = vehicle;
+        const speedMultiplier = vehicle.congestionMultiplier ?? 1;
 
         // Fall back to simple speed-based if segment data isn't available
         if (!segmentSpeeds?.length || !segmentDistances?.length || segmentDistances.length < stopTimes.length) {
@@ -57,6 +58,7 @@ export class SegmentBasedStrategy implements PredictionStrategy {
                 stopDist,
                 segmentSpeeds,
                 segmentDistances,
+                speedMultiplier,
             );
 
             // Add dwell time for each intermediate stop between startIndex and i
@@ -100,6 +102,7 @@ export class SegmentBasedStrategy implements PredictionStrategy {
         targetDist: number,
         segmentSpeeds: number[],
         segmentDistances: number[],
+        speedMultiplier = 1,
     ): number {
         if (targetDist <= currentDist) return 0;
 
@@ -109,7 +112,7 @@ export class SegmentBasedStrategy implements PredictionStrategy {
         for (let seg = 0; seg < segmentSpeeds.length; seg++) {
             const segStart = segmentDistances[seg] ?? 0;
             const segEnd = segmentDistances[seg + 1] ?? Infinity;
-            const speed = Math.max(segmentSpeeds[seg], MIN_SPEED_MPS);
+            const speed = Math.max(segmentSpeeds[seg], MIN_SPEED_MPS) * speedMultiplier;
 
             // Skip segments we've already passed
             if (pos >= segEnd) continue;

@@ -6,6 +6,7 @@ import { DetourStore } from '../detour/store.js';
 import { Detour } from '../detour/types.js';
 import { VehicleState, InterpolatedShapePoint } from './types.js';
 import { VehicleDataSource } from '../realtime/vehicle-data-source.js';
+import { RandomFn, SeededRng, nextGaussianFrom } from './rng.js';
 
 /**
  * High-performance vehicle simulation engine.
@@ -19,6 +20,22 @@ const DEFAULT_SPEED_MPS = 8.9;            // ~20 mph average city bus speed
 const MAX_SPEED_MPS = 15.6;               // ~35 mph — cap for unrealistic schedule segments
 const STOP_DWELL_MS = 15_000;             // 15 seconds dwell at each stop
 const SIM_TICK_MS = 1_000;                // Update every second
+const END_GRACE_S = 3600;                 // despawn margin past the trip's scheduled last arrival
+
+export interface SimulationOptions {
+    /** Epoch-ms clock. Defaults to Date.now. */
+    clock?: () => number;
+    /** Uniform [0,1) RNG. Defaults to Math.random. */
+    rng?: RandomFn;
+    /** Seed for a deterministic RNG (overrides `rng`). */
+    seed?: number;
+    /** Manual time control: use advance(seconds) to drive the clock. */
+    manual?: boolean;
+    /** Interval for the auto tick loop. */
+    tickIntervalMs?: number;
+    /** Enable per-vehicle speed noise (defaults to SIMULATION_DEBUG_MODE=true). */
+    speedNoise?: boolean;
+}
 
 export class SimulationEngine implements VehicleDataSource {
     readonly sourceName = 'simulation';
@@ -34,12 +51,35 @@ export class SimulationEngine implements VehicleDataSource {
 
     // Congestion overlays: routeId/tripId -> speedMultiplier
     private congestionPresets: Map<string, number> = new Map();
+    // stopId -> extra dwell ms applied when a vehicle arrives at that stop
+    private stopDwellAdjustMs: Map<string, number> = new Map();
+
+    private readonly clock: () => number;
+    private rng: RandomFn;
+    private readonly manual: boolean;
+    private simTimeEpochMs: number;
+    private readonly tickIntervalMs: number;
+    private speedNoiseEnabled: boolean;
 
     constructor(
         private repo: GTFSRepository,
         private detourEngine: DetourEngine,
         private detourStore?: DetourStore,
-    ) { }
+        options: SimulationOptions = {},
+    ) {
+        this.manual = options.manual ?? false;
+        this.clock = options.clock ?? (() => Date.now());
+        this.simTimeEpochMs = options.clock ? options.clock() : Date.now();
+        const seeded = options.seed !== undefined ? new SeededRng(options.seed) : undefined;
+        this.rng = seeded ? seeded.next.bind(seeded) : (options.rng ?? Math.random);
+        this.tickIntervalMs = options.tickIntervalMs ?? SIM_TICK_MS;
+        this.speedNoiseEnabled = options.speedNoise ?? (process.env.SIMULATION_DEBUG_MODE === 'true');
+    }
+
+    /** Current simulation time (epoch ms). In manual mode this is the advance() clock. */
+    now(): number {
+        return this.manual ? this.simTimeEpochMs : this.clock();
+    }
 
     /** Provide a reference to the DetourStore (for querying active detours per route). */
     setDetourStore(store: DetourStore): void {
@@ -182,15 +222,12 @@ export class SimulationEngine implements VehicleDataSource {
     }
 
     /**
-     * Generate a speed factor using Box-Muller normal distribution (mean=1, std=0.1),
-     * clamped to [0.7, 1.3].
+     * Generate a speed factor using normal distribution (mean=1, std=0.1),
+     * clamped to [0.7, 1.3]. Uses the injected (optionally seeded) RNG.
      */
     private generateSpeedFactor(): number {
-        const u1 = Math.random();
-        const u2 = Math.random();
-        const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-        let factor = 1.0 + (z * 0.1);
-        return Math.max(0.7, Math.min(1.3, factor));
+        const z = nextGaussianFrom(this.rng, 0, 0.1);
+        return Math.max(0.7, Math.min(1.3, 1.0 + z));
     }
 
     /**
@@ -308,7 +345,8 @@ export class SimulationEngine implements VehicleDataSource {
     /**
      * Spawn vehicles for trips that should be active right now based on the GTFS schedule.
      */
-    spawnActiveVehicles(now: Date = new Date()): void {
+    spawnActiveVehicles(now: Date = new Date(this.now())): void {
+        if (this.manual) this.simTimeEpochMs = now.getTime();
         const dateStr = this.formatDateStr(now);
         const nowSecondsSinceMidnight = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 
@@ -337,20 +375,11 @@ export class SimulationEngine implements VehicleDataSource {
             // Check if already spawned
             if (this.getVehicleForTrip(trip.trip_id)) continue;
 
-            // Calculate approximate position along the route based on elapsed time
-            const elapsed = nowSecondsSinceMidnight - firstDeparture;
-            const totalTripTime = lastArrival - firstDeparture;
-            const progress = Math.min(elapsed / totalTripTime, 1.0);
-            const distanceTraveled = progress * shape[shape.length - 1].distance;
+            const vehicleId = `v${++this.vehicleCounter}`;
 
-            // Find closest shape index
-            let shapeIndex = 0;
-            for (let i = 0; i < shape.length; i++) {
-                if (shape[i].distance >= distanceTraveled) {
-                    shapeIndex = i;
-                    break;
-                }
-            }
+            // Per-segment speeds (with optional per-vehicle noise)
+            const speedFactor = this.speedNoiseEnabled ? this.generateSpeedFactor() : 1.0;
+            const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(trip.shape_id, stopTimes, shape, speedFactor);
 
             // Find current stop index
             let currentStopIndex = 0;
@@ -360,17 +389,40 @@ export class SimulationEngine implements VehicleDataSource {
                 }
             }
 
-            const vehicleId = `v${++this.vehicleCounter}`;
+            // Dwell-aware position: parked at a stop while dwelling, otherwise
+            // interpolated through the current segment at its scheduled speed.
+            // This keeps the spawn state consistent with the movement model.
+            let distanceTraveled: number;
+            const stopDist = segmentDistances[currentStopIndex] ?? 0;
+            if (nowSecondsSinceMidnight < stopTimes[currentStopIndex].departure_time) {
+                distanceTraveled = stopDist; // still dwelling at the current stop
+            } else if (currentStopIndex < stopTimes.length - 1) {
+                const segStart = stopDist;
+                const segEnd = segmentDistances[currentStopIndex + 1] ?? segStart;
+                const elapsedInSeg = Math.max(0, nowSecondsSinceMidnight - stopTimes[currentStopIndex].departure_time);
+                const segSpeed = segmentSpeeds[Math.min(currentStopIndex, segmentSpeeds.length - 1)] ?? DEFAULT_SPEED_MPS;
+                distanceTraveled = Math.min(segEnd, segStart + elapsedInSeg * segSpeed);
+            } else {
+                distanceTraveled = segmentDistances[segmentDistances.length - 1];
+            }
+            distanceTraveled = Math.max(0, Math.min(distanceTraveled, shape[shape.length - 1].distance));
+
+            // Find closest shape index
+            let shapeIndex = 0;
+            for (let i = 0; i < shape.length; i++) {
+                if (shape[i].distance >= distanceTraveled) {
+                    shapeIndex = i;
+                    break;
+                }
+            }
+            // At/past the end of the shape — clamp to the last point
+            if (shape[shape.length - 1].distance <= distanceTraveled) {
+                shapeIndex = shape.length - 1;
+            }
+
             const pos = shape[shapeIndex];
             const nextPos = shape[Math.min(shapeIndex + 1, shape.length - 1)];
             const bearing = this.calculateBearing(pos.lat, pos.lon, nextPos.lat, nextPos.lon);
-
-            // Calculate per-segment speeds
-            const speedFactor = process.env.SIMULATION_DEBUG_MODE === 'true'
-                ? this.generateSpeedFactor()
-                : 1.0;
-
-            const { segmentSpeeds, segmentDistances } = this.computeSegmentSpeeds(trip.shape_id, stopTimes, shape, speedFactor);
 
             // Calculate base speed from schedule (for diagnostics)
             const totalTripDuration = lastArrival - firstDeparture;
@@ -408,7 +460,9 @@ export class SimulationEngine implements VehicleDataSource {
                 segmentSpeeds,
                 segmentDistances,
                 baseSpeed,
-                speedFactor: process.env.SIMULATION_DEBUG_MODE === 'true' ? speedFactor : undefined,
+                speedFactor: this.speedNoiseEnabled ? speedFactor : undefined,
+                scheduledEndTime: lastArrival,
+                congestionMultiplier: 1,
                 delaySeconds: 0,
                 occupancyStatus: this.getRandomOccupancy(),
                 congestionLevel: this.getCongestionFromSpeed(speedFactor),
@@ -444,8 +498,8 @@ export class SimulationEngine implements VehicleDataSource {
 
         console.log('Starting vehicle simulation...');
         this.tickTimer = setInterval(() => {
-            this.tick();
-        }, SIM_TICK_MS);
+            this.tickAt(this.now());
+        }, this.tickIntervalMs);
     }
 
     stop(): void {
@@ -456,11 +510,41 @@ export class SimulationEngine implements VehicleDataSource {
     }
 
     /**
+     * Manually advance the simulation clock (manual mode only), ticking at a
+     * fixed step. Enables deterministic scenario testing without real-time sleeps.
+     */
+    advance(seconds: number, stepMs: number = 1000): void {
+        if (!this.manual) {
+            throw new Error('advance() requires manual mode (options.manual: true)');
+        }
+        const steps = Math.max(1, Math.ceil((seconds * 1000) / stepMs));
+        for (let i = 0; i < steps; i++) {
+            this.simTimeEpochMs += stepMs;
+            this.tickAt(this.simTimeEpochMs);
+        }
+    }
+
+    /** Reset all simulation state (vehicles, metrics, presets, counters). */
+    reset(): void {
+        this.vehicles.clear();
+        this.vehiclesByTripId.clear();
+        this.arrivalLog = [];
+        this.arrivalLogIndex = 0;
+        this.totalArrivalsWithPredictions = 0;
+        this.sumSquaredError = 0;
+        this.sumAbsoluteError = 0;
+        this.vehicleCounter = 0;
+        this.tickCounter = 0;
+        this.activeTripIds = [];
+        this.congestionPresets.clear();
+        this.stopDwellAdjustMs.clear();
+    }
+
+    /**
      * Single simulation tick — updates ALL vehicles.
      * Performance target: < 50ms for 2000+ vehicles.
      */
-    private tick(): void {
-        const now = Date.now();
+    private tickAt(now: number): void {
         const toDespawn: string[] = [];
         this.tickCounter++;
 
@@ -474,31 +558,42 @@ export class SimulationEngine implements VehicleDataSource {
                 continue;
             }
 
+            // Despawn trips well past their scheduled last arrival (grace period)
+            const nowSecSinceMidnight = this.secondsSinceMidnight(now);
+            if (vehicle.scheduledEndTime !== undefined && nowSecSinceMidnight > vehicle.scheduledEndTime + END_GRACE_S) {
+                toDespawn.push(vehicleId);
+                continue;
+            }
+
             // Handle dwelling at stop
             if (vehicle.status === 'AT_STOP') {
                 if (now >= vehicle.dwellEndTime) {
-                    vehicle.status = 'IN_TRANSIT';
-                    vehicle.currentStopIndex++;
+                    // Deferred hold: keep dwelling at the stop until the hold expires
+                    if (vehicle.holdUntilEpochMs !== undefined && now < vehicle.holdUntilEpochMs) {
+                        vehicle.dwellEndTime = vehicle.holdUntilEpochMs;
+                    } else {
+                        vehicle.holdUntilEpochMs = undefined;
+                        vehicle.status = 'IN_TRANSIT';
+                        vehicle.currentStopIndex++;
 
-                    if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length) {
-                        vehicle.nextStopId = vehicle.cachedStopTimes[vehicle.currentStopIndex].stop_id;
-                        const nextStopData = this.repo.getStop(vehicle.nextStopId);
-                        vehicle.nextStopLat = nextStopData?.stop_lat;
-                        vehicle.nextStopLon = nextStopData?.stop_lon;
+                        if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length) {
+                            vehicle.nextStopId = vehicle.cachedStopTimes[vehicle.currentStopIndex].stop_id;
+                            const nextStopData = this.repo.getStop(vehicle.nextStopId);
+                            vehicle.nextStopLat = nextStopData?.stop_lat;
+                            vehicle.nextStopLon = nextStopData?.stop_lon;
+                        }
                     }
                 }
                 continue;
             }
 
-            // ─── Service hold (operator hold instruction) ───
-            // Freeze the vehicle in place until the hold expires. Position and
-            // stop progress are unchanged, so predictions naturally extend later.
-            if (vehicle.holdUntilEpochMs !== undefined) {
-                if (now < vehicle.holdUntilEpochMs) {
+            // ─── Breakdown: freeze the vehicle in place until it recovers ───
+            if (vehicle.breakdownUntilEpochMs !== undefined) {
+                if (now < vehicle.breakdownUntilEpochMs) {
                     vehicle.lastUpdateTime = now;
                     continue;
                 }
-                vehicle.holdUntilEpochMs = undefined;
+                vehicle.breakdownUntilEpochMs = undefined;
             }
 
             // Get the shape this vehicle follows (may be a detour shape)
@@ -570,6 +665,7 @@ export class SimulationEngine implements VehicleDataSource {
                 ?? this.congestionPresets.get(vehicle.tripId)
                 ?? 1.0;
 
+            vehicle.congestionMultiplier = congestionMultiplier;
             vehicle.speed = baseSegmentSpeed * congestionMultiplier;
 
             const distDelta = vehicle.speed * dt;
@@ -608,21 +704,17 @@ export class SimulationEngine implements VehicleDataSource {
                 const distToStop = haversineMeters(vehicle.lat, vehicle.lon, vehicle.nextStopLat, vehicle.nextStopLon);
                 if (distToStop < 30) { // within 30m of stop
                     vehicle.status = 'AT_STOP';
-                    vehicle.dwellEndTime = now + STOP_DWELL_MS;
+                    vehicle.dwellEndTime = now + STOP_DWELL_MS + (this.stopDwellAdjustMs.get(vehicle.nextStopId) ?? 0);
                     vehicle.lat = vehicle.nextStopLat;
                     vehicle.lon = vehicle.nextStopLon;
 
-                    // Record arrival and compute delay
-                    if (process.env.SIMULATION_DEBUG_MODE === 'true') {
-                        this.recordArrival(vehicle, vehicle.nextStopId, now);
-
-                        // Compute schedule delay: actual arrival vs scheduled
-                        const nowDate = new Date(now);
-                        const secsSinceMidnight = nowDate.getHours() * 3600 + nowDate.getMinutes() * 60 + nowDate.getSeconds();
-                        const scheduledArrival = vehicle.cachedStopTimes[vehicle.currentStopIndex]?.arrival_time;
-                        if (scheduledArrival !== undefined) {
-                            vehicle.delaySeconds = secsSinceMidnight - scheduledArrival;
-                        }
+                    // Record arrival and compute schedule delay (always on so
+                    // schedule-adherence is observable without debug mode).
+                    this.recordArrival(vehicle, vehicle.nextStopId, now);
+                    const secsSinceMidnight = this.secondsSinceMidnight(now);
+                    const scheduledArrival = vehicle.cachedStopTimes[vehicle.currentStopIndex]?.arrival_time;
+                    if (scheduledArrival !== undefined) {
+                        vehicle.delaySeconds = secsSinceMidnight - scheduledArrival;
                     }
                 }
             }
@@ -675,13 +767,18 @@ export class SimulationEngine implements VehicleDataSource {
     }
 
     /**
-     * Apply a service hold to a vehicle: freezes it in place for `seconds`.
-     * No-op if the vehicle is unknown or already completed.
+     * Apply a service hold to a vehicle for `seconds`. If the vehicle is at a
+     * stop, the dwell is extended; otherwise the hold is deferred until the
+     * vehicle reaches its next stop.
      */
     applyHold(vehicleId: string, seconds: number): boolean {
         const vehicle = this.vehicles.get(vehicleId);
         if (!vehicle || vehicle.status === 'COMPLETED') return false;
-        vehicle.holdUntilEpochMs = Date.now() + seconds * 1000;
+        const until = this.now() + seconds * 1000;
+        vehicle.holdUntilEpochMs = until;
+        if (vehicle.status === 'AT_STOP' && until > vehicle.dwellEndTime) {
+            vehicle.dwellEndTime = until;
+        }
         return true;
     }
 
@@ -696,10 +793,55 @@ export class SimulationEngine implements VehicleDataSource {
         return false;
     }
 
-    /** Whether a vehicle is currently being held. */
+    /** Whether a vehicle has an active (future) hold. */
     isHeld(vehicleId: string): boolean {
         const vehicle = this.vehicles.get(vehicleId);
-        return !!vehicle && vehicle.holdUntilEpochMs !== undefined && vehicle.holdUntilEpochMs > Date.now();
+        return !!vehicle && vehicle.holdUntilEpochMs !== undefined && vehicle.holdUntilEpochMs > this.now();
+    }
+
+    /** Freeze a vehicle in place (even mid-route) for `seconds` to model a breakdown. */
+    applyBreakdown(vehicleId: string, seconds: number): boolean {
+        const vehicle = this.vehicles.get(vehicleId);
+        if (!vehicle || vehicle.status === 'COMPLETED') return false;
+        vehicle.breakdownUntilEpochMs = this.now() + seconds * 1000;
+        return true;
+    }
+
+    /** Whether a vehicle is currently broken down. */
+    isBreakdown(vehicleId: string): boolean {
+        const vehicle = this.vehicles.get(vehicleId);
+        return !!vehicle && vehicle.breakdownUntilEpochMs !== undefined && vehicle.breakdownUntilEpochMs > this.now();
+    }
+
+    /** Deterministically rescale a vehicle's segment speeds (bunch/gap scenarios). */
+    setSpeedFactor(vehicleId: string, factor: number): boolean {
+        const vehicle = this.vehicles.get(vehicleId);
+        if (!vehicle || !vehicle.segmentSpeeds) return false;
+        vehicle.segmentSpeeds = vehicle.segmentSpeeds.map(s => s * factor);
+        vehicle.speedMultiplier = (vehicle.speedMultiplier ?? 1) * factor;
+        return true;
+    }
+
+    /** Add extra dwell (ms) whenever a vehicle arrives at the given stop. */
+    setStopDwell(stopId: string, extraMs: number): void {
+        this.stopDwellAdjustMs.set(stopId, extraMs);
+    }
+
+    /** Swap in a seeded RNG for reproducible runs. */
+    setRandomSeed(seed: number): void {
+        const seeded = new SeededRng(seed);
+        this.rng = seeded.next.bind(seeded);
+    }
+
+    /** Enable/disable per-vehicle speed noise (optionally seeded). */
+    setSpeedNoise(enabled: boolean, seed?: number): void {
+        this.speedNoiseEnabled = enabled;
+        if (seed !== undefined) this.setRandomSeed(seed);
+    }
+
+    private secondsSinceMidnight(epochMs: number): number {
+        const d = new Date(epochMs);
+        return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
     }
 
     private formatDateStr(date: Date): string {
@@ -756,7 +898,7 @@ export class SimulationEngine implements VehicleDataSource {
     }
 
     private getRandomOccupancy(): number {
-        const r = Math.random();
+        const r = this.rng();
         if (r < 0.05) return 0; // EMPTY
         if (r < 0.45) return 1; // MANY_SEATS_AVAILABLE
         if (r < 0.75) return 2; // FEW_SEATS_AVAILABLE
