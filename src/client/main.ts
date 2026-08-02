@@ -1,4 +1,4 @@
-import { api, RouteInfo, StopInfo, DetourData, VehicleData, BlockData, BlockTrip, HeadwayData, HeadwayStatus } from './services';
+import { api, RouteInfo, StopInfo, DetourData, VehicleData, BlockData, BlockTrip, HeadwayData, HeadwayStatus, HeadwayControlPoint, Recommendation, OperatorInstruction } from './services';
 
 // ─── Declare Leaflet global from CDN ───
 declare const L: any;
@@ -62,6 +62,9 @@ let headwayRouteId: string | null = null;
 let headwayDirection: number | '' = '';
 let headwayData: HeadwayData | null = null;
 let headwayTimer: ReturnType<typeof setInterval> | null = null;
+let currentRecommendations: Recommendation[] = [];
+let currentInstructions: OperatorInstruction[] = [];
+const actedRecKeys = new Set<string>();
 
 // Detour expansion state
 let expandedDetourIds = new Set<string>();
@@ -3122,6 +3125,52 @@ function setupNavigation() {
     const btnRefreshHeadways = document.getElementById('btn-refresh-headways');
     if (btnRefreshHeadways) btnRefreshHeadways.addEventListener('click', () => refreshHeadways());
 
+    // 7c. Headway recommendation + instruction actions (event delegation)
+    const recContainer = document.getElementById('headway-recommendations');
+    if (recContainer) {
+        recContainer.addEventListener('click', async (e) => {
+            const btn = (e.target as HTMLElement).closest('[data-rec-action]') as HTMLElement | null;
+            if (!btn) return;
+            const action = btn.getAttribute('data-rec-action');
+            const id = btn.getAttribute('data-rec-id');
+            const rec = currentRecommendations.find(r => r.id === id);
+            if (!rec) return;
+            if (action === 'accept') {
+                try {
+                    await api.acceptRecommendation(rec);
+                    actedRecKeys.add(rec.id);
+                    await refreshInstructions();
+                    await refreshHeadways();
+                    showAlert(`Hold ${rec.holdSeconds}s instruction sent to ${rec.vehicleId}`);
+                } catch (err) {
+                    showError('Failed to accept recommendation: ' + (err as Error).message);
+                }
+            } else if (action === 'dismiss') {
+                actedRecKeys.add(rec.id);
+                renderRecommendations(currentRecommendations);
+            }
+        });
+    }
+    const instContainer = document.getElementById('headway-instructions');
+    if (instContainer) {
+        instContainer.addEventListener('click', async (e) => {
+            const btn = (e.target as HTMLElement).closest('[data-instr-action]') as HTMLElement | null;
+            if (!btn) return;
+            const action = btn.getAttribute('data-instr-action');
+            const id = btn.getAttribute('data-instr-id');
+            if (!id) return;
+            try {
+                if (action === 'ack') await api.acknowledgeInstruction(id);
+                else if (action === 'complete') await api.completeInstruction(id);
+                else if (action === 'cancel') await api.cancelInstruction(id);
+                await refreshInstructions();
+                await refreshHeadways();
+            } catch (err) {
+                showError('Instruction action failed: ' + (err as Error).message);
+            }
+        });
+    }
+
     // 7. Event Delegation for Block Viewer
     const blockContent = document.getElementById('block-view-content');
     if (blockContent) {
@@ -3184,10 +3233,14 @@ function setupNavigation() {
 
 // ─── Headways View ───
 
-const CHART_ROW_H = 36;
-const CHART_Y_AXIS_W = 190;
-const CHART_HEADER_H = 34;
-const CHART_PIXELS_PER_MINUTE = 1.5;
+// Route-strip headway chart geometry
+const STRIP_STOP_W = 96;
+const STRIP_H = 230;
+const STRIP_PAD_L = 30;
+const STRIP_PAD_R = 30;
+const STRIP_BUS_Y = 155;
+const STRIP_LABEL_Y = 205;
+const STRIP_MAX_STOPS = 24;
 
 function ensureHeadwayRouteOptions() {
     const select = document.getElementById('headway-route-select') as HTMLSelectElement | null;
@@ -3216,6 +3269,7 @@ function updateHeadwayDirectionOptions() {
 async function loadHeadwaysView() {
     ensureHeadwayRouteOptions();
     if (headwayRouteId) await refreshHeadways();
+    else refreshInstructions();
     startHeadwayPolling();
 }
 
@@ -3242,6 +3296,28 @@ async function refreshHeadways() {
         console.error('Failed to load headways:', err);
         const el = document.getElementById('headway-chart-container');
         if (el) el.innerHTML = `<p class="empty-state" style="color:var(--accent-red);padding:24px">Failed to load headways: ${(err as Error).message}</p>`;
+    }
+    await refreshRecommendations();
+    await refreshInstructions();
+}
+
+async function refreshRecommendations() {
+    if (!headwayRouteId) return;
+    try {
+        const data = await api.getRecommendations(headwayRouteId, headwayDirection === '' ? undefined : Number(headwayDirection));
+        currentRecommendations = data.recommendations;
+        renderRecommendations(currentRecommendations);
+    } catch (err) {
+        console.error('Failed to load recommendations:', err);
+    }
+}
+
+async function refreshInstructions() {
+    try {
+        currentInstructions = await api.getInstructions(true);
+        renderInstructions(currentInstructions);
+    } catch (err) {
+        console.error('Failed to load instructions:', err);
     }
 }
 
@@ -3301,48 +3377,14 @@ function renderHeadwayChart(data: HeadwayData) {
         return;
     }
 
-    // Control point index map (stopId -> y index)
-    const ctrlIndex = new Map<string, number>();
-    data.controlPoints.forEach((cp, i) => ctrlIndex.set(cp.stopId, i));
+    // Equally spaced subset of control stops along the x-axis
+    const stops = sampleStops(data.controlPoints, STRIP_MAX_STOPS);
+    const n = stops.length;
+    const stripLen = (n - 1) * STRIP_STOP_W;
+    const totalW = STRIP_PAD_L + stripLen + STRIP_PAD_R;
 
-    // Build per-vehicle polylines limited to control-point stops
-    const vehicleLines: { vehicle: HeadwayData['vehicles'][number]; pts: { t: number; y: number; seq: number }[] }[] = [];
-
-    let minTime = Infinity;
-    let maxTime = -Infinity;
-    for (const v of data.vehicles) {
-        const pts: { t: number; y: number; seq: number }[] = [];
-        for (const p of v.points) {
-            const yIdx = ctrlIndex.get(p.stopId);
-            if (yIdx === undefined) continue;
-            pts.push({ t: p.predictedArrival, y: yIdx, seq: p.stopSequence });
-            if (p.predictedArrival < minTime) minTime = p.predictedArrival;
-            if (p.predictedArrival > maxTime) maxTime = p.predictedArrival;
-        }
-        if (pts.length > 0) vehicleLines.push({ vehicle: v, pts });
-    }
-
-    if (vehicleLines.length === 0 || !isFinite(minTime) || !isFinite(maxTime)) {
-        container.innerHTML = `<p class="empty-state" style="padding:24px">No predictable trajectory available for these vehicles</p>`;
-        return;
-    }
-
-    // Time window with margin; clamp to 6h to avoid pathological ranges
-    const marginSec = 5 * 60;
-    let t0 = minTime - marginSec;
-    let t1 = maxTime + marginSec;
-    if (t1 - t0 > 6 * 3600) {
-        const center = (t0 + t1) / 2;
-        t0 = center - 3 * 3600;
-        t1 = center + 3 * 3600;
-    }
-
-    const chartW = ((t1 - t0) / 60) * CHART_PIXELS_PER_MINUTE;
-    const chartH = CHART_HEADER_H + data.controlPoints.length * CHART_ROW_H;
-    const totalW = CHART_Y_AXIS_W + chartW;
-
-    const xOf = (t: number) => CHART_Y_AXIS_W + ((t - t0) / 60) * CHART_PIXELS_PER_MINUTE;
-    const yOf = (idx: number) => CHART_HEADER_H + idx * CHART_ROW_H + CHART_ROW_H / 2;
+    const xOf = (fraction: number) => STRIP_PAD_L + Math.max(0, Math.min(1, fraction)) * stripLen;
+    const busY = STRIP_BUS_Y;
 
     const statusColor = (s: HeadwayStatus) => {
         switch (s) {
@@ -3354,35 +3396,46 @@ function renderHeadwayChart(data: HeadwayData) {
         }
     };
 
-    let svg = `<svg width="${totalW}" height="${chartH}" class="headway-svg" style="min-width:${totalW}px;min-height:${chartH}px">`;
+    const scheduledForFraction = (fraction: number): number | null => {
+        const idx = Math.round(Math.max(0, Math.min(1, fraction)) * (n - 1));
+        return stops[idx]?.scheduledHeadwaySeconds ?? null;
+    };
 
-    // Grid + y-axis labels
-    for (let i = 0; i < data.controlPoints.length; i++) {
-        const y = CHART_HEADER_H + i * CHART_ROW_H;
-        svg += `<line x1="${CHART_Y_AXIS_W}" y1="${y}" x2="${totalW}" y2="${y}" class="headway-grid-h" />`;
-        const fullName = data.controlPoints[i].stopName;
-        const name = fullName.length > 26 ? fullName.slice(0, 25) + '…' : fullName;
-        svg += `<text x="6" y="${y + CHART_ROW_H / 2 + 4}" class="headway-axis-label">${escapeXml(name)}</text>`;
+    let svg = `<svg width="${totalW}" height="${STRIP_H}" class="headway-svg" style="min-width:${totalW}px;min-height:${STRIP_H}px">`;
+
+    // Header
+    svg += `<text x="${STRIP_PAD_L}" y="18" class="headway-axis-time">${data.directionId !== null ? `Direction ${data.directionId}` : 'All directions'} · ${escapeXml(data.route.routeShortName)}</text>`;
+
+    // Route line
+    svg += `<line x1="${STRIP_PAD_L}" y1="${busY}" x2="${STRIP_PAD_L + stripLen}" y2="${busY}" class="headway-route-line" />`;
+
+    // Stops: ticks + labels below the line
+    for (let i = 0; i < n; i++) {
+        const x = xOf(i / (n - 1));
+        svg += `<line x1="${x}" y1="${busY - 6}" x2="${x}" y2="${busY + 6}" class="headway-stop-tick" />`;
+        const fullName = stops[i].stopName;
+        const name = fullName.length > 12 ? fullName.slice(0, 11) + '…' : fullName;
+        svg += `<text x="${x}" y="${STRIP_LABEL_Y}" text-anchor="middle" class="headway-stop-label">${escapeXml(name)}</text>`;
     }
 
-    // x-axis time markers every 15 min
-    const stepSec = 15 * 60;
-    for (let t = Math.ceil(t0 / stepSec) * stepSec; t <= t1; t += stepSec) {
-        const x = xOf(t);
-        svg += `<line x1="${x}" y1="${CHART_HEADER_H}" x2="${x}" y2="${chartH}" class="headway-grid-v" />`;
-        svg += `<text x="${x + 4}" y="16" class="headway-axis-time">${formatClock(t)}</text>`;
-    }
-
-    // Vehicle polylines + current-position markers
-    for (const { vehicle: v, pts } of vehicleLines) {
-        const sorted = [...pts].sort((a, b) => a.seq - b.seq);
+    // Buses positioned by their progress along the route; scheduled/actual
+    // headway shown above each bus.
+    for (const v of data.vehicles) {
+        const frac = Math.max(0, Math.min(1, v.progress));
+        const x = xOf(frac);
         const color = statusColor(v.headwayStatus);
-        const pointsStr = sorted.map(p => `${xOf(p.t).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(' ');
-        svg += `<polyline points="${pointsStr}" style="fill:none;stroke:${color};stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round" class="headway-line" />`;
-        // current position marker: first point at/after current stop index
-        const current = sorted.find(p => p.seq - 1 >= v.currentStopIndex);
-        const marker = current ?? sorted[sorted.length - 1];
-        svg += `<circle cx="${xOf(marker.t).toFixed(1)}" cy="${yOf(marker.y).toFixed(1)}" r="6" style="fill:${color};stroke:var(--bg-primary);stroke-width:2" />`;
+        const sched = scheduledForFraction(frac);
+        const schedStr = sched !== null ? formatDuration(sched) : '—';
+        const actualStr = v.headwayAheadSeconds !== null ? formatDuration(v.headwayAheadSeconds) : '—';
+
+        const detail = `Vehicle ${escapeXml(v.vehicleId)}\nTrip ${escapeXml(v.tripId)}\nScheduled headway ${schedStr}\nActual headway ${actualStr}\nStatus ${v.headwayStatus}`;
+
+        svg += `<g class="headway-bus-group" data-vehicle="${escapeXml(v.vehicleId)}">
+            <title>${detail}</title>
+            <text x="${x}" y="${busY - 38}" text-anchor="middle" class="headway-bus-hw">S ${schedStr}</text>
+            <text x="${x}" y="${busY - 24}" text-anchor="middle" class="headway-bus-hw headway-bus-hw-actual">A ${actualStr}</text>
+            <text x="${x}" y="${busY + 7}" text-anchor="middle" class="headway-bus-icon">🚌</text>
+        </g>`;
     }
 
     svg += `</svg>`;
@@ -3391,6 +3444,17 @@ function renderHeadwayChart(data: HeadwayData) {
         <div class="headway-chart-wrap" style="width:${totalW}px">
             ${svg}
         </div>`;
+}
+
+/** Evenly spaced subset of control stops so the x-axis stays readable. */
+function sampleStops(stops: HeadwayControlPoint[], max: number): HeadwayControlPoint[] {
+    if (stops.length <= max) return stops;
+    const step = (stops.length - 1) / (max - 1);
+    const out: HeadwayControlPoint[] = [];
+    for (let i = 0; i < max; i++) {
+        out.push(stops[Math.round(i * step)]);
+    }
+    return out;
 }
 
 function renderHeadwayTable(data: HeadwayData) {
@@ -3440,6 +3504,74 @@ function renderHeadwayTable(data: HeadwayData) {
         </div>`;
 }
 
+function renderRecommendations(list: Recommendation[]) {
+    const el = document.getElementById('headway-recommendations');
+    if (!el) return;
+    if (!headwayRouteId) {
+        el.innerHTML = `<div class="empty-state" style="padding:12px">Select a route</div>`;
+        return;
+    }
+    const visible = list.filter(r => !actedRecKeys.has(r.id));
+    if (visible.length === 0) {
+        el.innerHTML = `<div class="empty-state" style="padding:12px">No service-restoration actions recommended</div>`;
+        return;
+    }
+    el.innerHTML = visible.map(r => `
+        <div class="rec-card">
+          <div class="rec-header">
+            <span class="rec-vehicle">🚌 ${escapeXml(r.vehicleId)}</span>
+            <span class="badge rec-action">HOLD ${r.holdSeconds}s</span>
+          </div>
+          <div class="rec-stop">at ${escapeXml(r.controlPointStopName)}</div>
+          <div class="rec-reason">${escapeXml(r.reason)}</div>
+          <div class="rec-metrics">
+            <span>Now ${formatDuration(r.currentHeadwaySeconds)}</span>
+            <span>→ ${formatDuration(r.expectedHeadwaySeconds)}</span>
+          </div>
+          <div class="rec-actions">
+            <button class="btn btn-primary btn-sm" data-rec-action="accept" data-rec-id="${r.id}">Accept</button>
+            <button class="btn btn-secondary btn-sm" data-rec-action="dismiss" data-rec-id="${r.id}">Dismiss</button>
+          </div>
+        </div>`).join('');
+}
+
+function renderInstructions(list: OperatorInstruction[]) {
+    const el = document.getElementById('headway-instructions');
+    if (!el) return;
+    if (list.length === 0) {
+        el.innerHTML = `<div class="empty-state" style="padding:12px">No active instructions</div>`;
+        return;
+    }
+    el.innerHTML = list.map(i => {
+        const statusClass = `inst-${i.status.toLowerCase()}`;
+        let actions = '';
+        if (i.status === 'SENT') {
+            actions = `<div class="inst-actions">
+                <button class="btn btn-primary btn-sm" data-instr-action="ack" data-instr-id="${i.id}">Acknowledge</button>
+                <button class="btn btn-secondary btn-sm" data-instr-action="cancel" data-instr-id="${i.id}">Cancel</button>
+              </div>`;
+        } else if (i.status === 'ACKNOWLEDGED') {
+            actions = `<div class="inst-actions">
+                <button class="btn btn-primary btn-sm" data-instr-action="complete" data-instr-id="${i.id}">Complete</button>
+                <button class="btn btn-secondary btn-sm" data-instr-action="cancel" data-instr-id="${i.id}">Cancel</button>
+              </div>`;
+        }
+        return `
+        <div class="inst-card ${statusClass}">
+          <div class="inst-header">
+            <span class="inst-vehicle">🚌 ${escapeXml(i.vehicleId)}</span>
+            <span class="badge inst-status ${statusClass}">${i.status}</span>
+          </div>
+          <div class="inst-message">${escapeXml(i.message)}</div>
+          <div class="inst-meta">
+            <span>${i.source}</span>
+            <span>${formatAge(i.createdAt)} ago</span>
+          </div>
+          ${actions}
+        </div>`;
+    }).join('');
+}
+
 function formatDuration(seconds: number | null): string {
     if (seconds === null || isNaN(seconds)) return '—';
     const s = Math.round(seconds);
@@ -3467,10 +3599,6 @@ function formatAge(ms: number): string {
     const s = Math.floor(age / 1000);
     if (s < 60) return `${s}s`;
     return `${Math.floor(s / 60)}m ${s % 60}s`;
-}
-
-function formatClock(epochSec: number): string {
-    return new Date(epochSec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function escapeXml(s: string): string {

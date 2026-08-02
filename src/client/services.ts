@@ -119,6 +119,51 @@ export const api = {
     getStatus: () => fetchJson<SystemStatus>('/status'),
     getHeadways: (routeId: string, direction?: number) =>
         fetchJson<HeadwayData>(`/headways?route_id=${encodeURIComponent(routeId)}${direction !== undefined ? `&direction=${direction}` : ''}`),
+    getRecommendations: (routeId: string, direction?: number) =>
+        fetchJson<{ timestamp: number; recommendations: Recommendation[] }>(`/headways/recommendations?route_id=${encodeURIComponent(routeId)}${direction !== undefined ? `&direction=${direction}` : ''}`),
+    acceptRecommendation: async (rec: Recommendation): Promise<OperatorInstruction> => {
+        const res = await fetch(`${API_BASE}/recommendations/accept`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify(rec),
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
+    getInstructions: (activeOnly = true) => fetchJson<OperatorInstruction[]>(`/instructions?active=${activeOnly}`),
+    createInstruction: async (data: {
+        vehicleId: string; tripId?: string; routeId?: string; action: 'HOLD';
+        controlPointStopId: string; controlPointStopName?: string; holdSeconds?: number; message?: string;
+    }): Promise<OperatorInstruction> => {
+        const res = await fetch(`${API_BASE}/instructions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': 'dev-key' },
+            body: JSON.stringify(data),
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
+    acknowledgeInstruction: async (id: string): Promise<OperatorInstruction> => {
+        const res = await fetch(`${API_BASE}/instructions/${id}/acknowledge`, {
+            method: 'POST', headers: { 'X-API-Key': 'dev-key' }
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
+    completeInstruction: async (id: string): Promise<OperatorInstruction> => {
+        const res = await fetch(`${API_BASE}/instructions/${id}/complete`, {
+            method: 'POST', headers: { 'X-API-Key': 'dev-key' }
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
+    cancelInstruction: async (id: string): Promise<OperatorInstruction> => {
+        const res = await fetch(`${API_BASE}/instructions/${id}/cancel`, {
+            method: 'POST', headers: { 'X-API-Key': 'dev-key' }
+        });
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        return res.json();
+    },
 
     // Block / Cancellation API
     getBlocks: (dateStr?: string) => fetchJson<BlockData[]>('/blocks' + (dateStr ? `?date=${dateStr}` : '')),
@@ -222,6 +267,7 @@ export interface HeadwayControlPoint {
     stopId: string;
     stopName: string;
     stopSequence: number;
+    scheduledHeadwaySeconds: number | null;
 }
 
 export interface HeadwayData {
@@ -233,4 +279,45 @@ export interface HeadwayData {
     vehicles: HeadwayVehicle[];
     controlPoints: HeadwayControlPoint[];
     warnings: string[];
+}
+
+export interface Recommendation {
+    id: string;
+    vehicleId: string;
+    tripId: string;
+    routeId: string;
+    action: 'HOLD';
+    controlPointStopId: string;
+    controlPointStopName: string;
+    holdSeconds: number;
+    currentHeadwaySeconds: number;
+    targetHeadwaySeconds: number;
+    expectedHeadwaySeconds: number;
+    reason: string;
+    confidence: number;
+    createdAt: number;
+    expiresAt: number;
+    status: 'PENDING';
+}
+
+export type InstructionAction = 'HOLD';
+export type InstructionStatus = 'SENT' | 'ACKNOWLEDGED' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED';
+
+export interface OperatorInstruction {
+    id: string;
+    vehicleId: string;
+    tripId: string;
+    routeId: string;
+    action: InstructionAction;
+    controlPointStopId: string;
+    controlPointStopName: string;
+    holdSeconds: number;
+    message: string;
+    status: InstructionStatus;
+    source: 'dispatcher' | 'recommendation';
+    createdAt: number;
+    acknowledgedAt: number | null;
+    completedAt: number | null;
+    cancelledAt: number | null;
+    expiresAt: number;
 }

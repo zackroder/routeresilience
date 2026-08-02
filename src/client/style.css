@@ -2376,6 +2376,149 @@ body.light-theme .block-label.all-selected {
   border-bottom: 1px solid var(--border);
 }
 
+.headway-panels {
+  display: flex;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.headway-panel {
+  flex: 1 1 360px;
+  min-width: 0;
+  margin: 0;
+}
+
+.headway-panel .panel-header h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.headway-panel-body {
+  max-height: 240px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+/* Recommendation cards */
+.rec-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-red);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.rec-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rec-vehicle {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.badge.rec-action {
+  background: var(--accent-red-dim);
+  color: var(--accent-red);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rec-stop {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.rec-reason {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.rec-metrics {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.rec-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Instruction cards */
+.inst-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent-blue);
+}
+
+.inst-card.inst-acknowledged { border-left-color: var(--accent-green); }
+.inst-card.inst-sent { border-left-color: var(--accent-blue); }
+
+.inst-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inst-vehicle {
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.badge.inst-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.badge.inst-status.inst-sent { background: var(--accent-blue-dim); color: var(--accent-blue); }
+.badge.inst-status.inst-acknowledged { background: var(--accent-green-dim); color: var(--accent-green); }
+
+.inst-message {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.inst-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.inst-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .headway-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -2439,20 +2582,21 @@ body.light-theme .block-label.all-selected {
   border-radius: 8px;
 }
 
-.headway-grid-h {
-  stroke: rgba(255, 255, 255, 0.06);
-  stroke-width: 1;
+/* Route-strip headway chart */
+.headway-route-line {
+  stroke: var(--border-strong);
+  stroke-width: 3;
 }
 
-.headway-grid-v {
-  stroke: rgba(255, 255, 255, 0.06);
-  stroke-width: 1;
+.headway-stop-tick {
+  stroke: var(--text-secondary);
+  stroke-width: 2;
 }
 
-.headway-axis-label {
+.headway-stop-label {
   fill: var(--text-secondary);
   font-family: var(--font-family);
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .headway-axis-time {
@@ -2461,8 +2605,25 @@ body.light-theme .block-label.all-selected {
   font-size: 11px;
 }
 
-.headway-line {
-  transition: opacity var(--transition-fast);
+.headway-bus-hw {
+  fill: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.headway-bus-hw-actual {
+  fill: var(--text-primary);
+  font-weight: 700;
+}
+
+.headway-bus-icon {
+  font-size: 20px;
+}
+
+.headway-bus-group {
+  cursor: pointer;
 }
 
 .headway-table-container {
@@ -2515,9 +2676,4 @@ body.light-theme .block-label.all-selected {
 
 .headway-num {
   font-variant-numeric: tabular-nums;
-}
-
-body.light-theme .headway-grid-h,
-body.light-theme .headway-grid-v {
-  stroke: rgba(0, 0, 0, 0.08);
 }
