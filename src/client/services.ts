@@ -117,6 +117,8 @@ export const api = {
     },
     getVehicles: () => fetchJson<{ count: number; vehicles: VehicleData[] }>('/vehicles'),
     getStatus: () => fetchJson<SystemStatus>('/status'),
+    getHeadways: (routeId: string, direction?: number) =>
+        fetchJson<HeadwayData>(`/headways?route_id=${encodeURIComponent(routeId)}${direction !== undefined ? `&direction=${direction}` : ''}`),
 
     // Block / Cancellation API
     getBlocks: (dateStr?: string) => fetchJson<BlockData[]>('/blocks' + (dateStr ? `?date=${dateStr}` : '')),
@@ -185,4 +187,50 @@ export interface CancelledTripData {
     trip_headsign: string;
     start_time: string | number;
     end_time: string | number;
+}
+
+export type HeadwayStatus = 'UNKNOWN' | 'STALE' | 'NORMAL' | 'BUNCHED' | 'GAPPED';
+
+export interface HeadwayStopPoint {
+    stopId: string;
+    stopName: string;
+    stopSequence: number;
+    predictedArrival: number;
+    predictedDeparture: number;
+    isRealtime: boolean;
+}
+
+export interface HeadwayVehicle {
+    vehicleId: string;
+    tripId: string;
+    routeId: string;
+    directionId: number;
+    status: string;
+    currentStopIndex: number;
+    currentStopId: string | null;
+    delaySeconds: number | null;
+    lastUpdateTime: number;
+    progress: number;
+    points: HeadwayStopPoint[];
+    headwayAheadSeconds: number | null;
+    headwayBehindSeconds: number | null;
+    targetHeadwaySeconds: number;
+    headwayStatus: HeadwayStatus;
+}
+
+export interface HeadwayControlPoint {
+    stopId: string;
+    stopName: string;
+    stopSequence: number;
+}
+
+export interface HeadwayData {
+    route: { routeId: string; routeShortName: string; routeLongName: string; routeColor: string };
+    directionId: number | null;
+    timestamp: number;
+    date: string;
+    targetHeadwaySeconds: number;
+    vehicles: HeadwayVehicle[];
+    controlPoints: HeadwayControlPoint[];
+    warnings: string[];
 }

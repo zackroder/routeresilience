@@ -2321,3 +2321,203 @@ body.light-theme .block-label.all-selected {
   margin-bottom: 8px;
   padding-left: 4px;
 }
+
+/* ─── Headways View ─── */
+#view-headways {
+  display: none;
+  flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+#view-headways.active {
+  display: flex;
+}
+
+.headway-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.headway-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.headway-select {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-family: var(--font-family);
+  font-size: 13px;
+  max-width: 320px;
+}
+
+.headway-select:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+}
+
+.headway-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.headway-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-secondary);
+  border-radius: 8px;
+  padding: 8px 14px;
+  min-width: 96px;
+}
+
+.headway-card-normal { border-left-color: var(--accent-blue); }
+.headway-card-bunched { border-left-color: var(--accent-red); }
+.headway-card-gapped { border-left-color: var(--accent-orange); }
+.headway-card-stale { border-left-color: var(--text-muted); }
+.headway-card-unknown { border-left-color: var(--text-secondary); }
+
+.headway-card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.headway-card-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.headway-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.headway-view-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.headway-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.headway-chart-wrap {
+  position: relative;
+}
+
+.headway-svg {
+  display: block;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.headway-grid-h {
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 1;
+}
+
+.headway-grid-v {
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 1;
+}
+
+.headway-axis-label {
+  fill: var(--text-secondary);
+  font-family: var(--font-family);
+  font-size: 11px;
+}
+
+.headway-axis-time {
+  fill: var(--text-muted);
+  font-family: var(--font-family);
+  font-size: 11px;
+}
+
+.headway-line {
+  transition: opacity var(--transition-fast);
+}
+
+.headway-table-container {
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.headway-table {
+  width: 100%;
+}
+
+.headway-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.headway-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-strong);
+  z-index: 1;
+}
+
+.headway-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.headway-table tr:hover td {
+  background: var(--bg-surface-hover);
+}
+
+.headway-table tr.headway-status-bunched td { border-left: 3px solid var(--accent-red); }
+.headway-table tr.headway-status-gapped td { border-left: 3px solid var(--accent-orange); }
+.headway-table tr.headway-status-stale td { border-left: 3px solid var(--text-muted); opacity: 0.7; }
+.headway-table tr.headway-status-normal td { border-left: 3px solid var(--accent-blue); }
+.headway-table tr.headway-status-unknown td { border-left: 3px solid var(--text-secondary); }
+
+.headway-num {
+  font-variant-numeric: tabular-nums;
+}
+
+body.light-theme .headway-grid-h,
+body.light-theme .headway-grid-v {
+  stroke: rgba(0, 0, 0, 0.08);
+}

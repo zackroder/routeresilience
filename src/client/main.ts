@@ -1,4 +1,4 @@
-import { api, RouteInfo, StopInfo, DetourData, VehicleData, BlockData, BlockTrip } from './services';
+import { api, RouteInfo, StopInfo, DetourData, VehicleData, BlockData, BlockTrip, HeadwayData, HeadwayStatus } from './services';
 
 // ─── Declare Leaflet global from CDN ───
 declare const L: any;
@@ -46,7 +46,7 @@ let vehicleUpdateTimer: ReturnType<typeof setInterval> | null = null;
 let currentRouteStops: StopInfo[] = [];
 
 // Block View state
-let activeView: 'map' | 'blocks' | 'cancelled' = 'map';
+let activeView: 'map' | 'blocks' | 'cancelled' | 'headways' = 'map';
 let blockViewDate = new Date().toISOString().slice(0, 10);
 let cachedBlocks: BlockData[] = [];
 let loadedBlockDate: string | null = null;
@@ -56,6 +56,12 @@ let selectedTripIds = new Set<string>();
 let lastClickedTripId: string | null = null;
 let visibleTripOrder: string[] = []; // flat ordered list of trip IDs from last render (for shift-range)
 // let pixelsPerHour = 100; // Zoom removed
+
+// Headway View state
+let headwayRouteId: string | null = null;
+let headwayDirection: number | '' = '';
+let headwayData: HeadwayData | null = null;
+let headwayTimer: ReturnType<typeof setInterval> | null = null;
 
 // Detour expansion state
 let expandedDetourIds = new Set<string>();
@@ -3095,6 +3101,27 @@ function setupNavigation() {
     const filterInput = document.getElementById('block-view-filter');
     if (filterInput) filterInput.addEventListener('input', renderBlockViewchart);
 
+    // 7b. Headway View Controls
+    const headwayRouteSelect = document.getElementById('headway-route-select') as HTMLSelectElement | null;
+    if (headwayRouteSelect) {
+        headwayRouteSelect.addEventListener('change', (e) => {
+            headwayRouteId = (e.target as HTMLSelectElement).value || null;
+            headwayDirection = '';
+            updateHeadwayDirectionOptions();
+            refreshHeadways();
+        });
+    }
+    const headwayDirSelect = document.getElementById('headway-direction-select') as HTMLSelectElement | null;
+    if (headwayDirSelect) {
+        headwayDirSelect.addEventListener('change', (e) => {
+            const val = (e.target as HTMLSelectElement).value;
+            headwayDirection = val === '' ? '' : Number(val);
+            refreshHeadways();
+        });
+    }
+    const btnRefreshHeadways = document.getElementById('btn-refresh-headways');
+    if (btnRefreshHeadways) btnRefreshHeadways.addEventListener('click', () => refreshHeadways());
+
     // 7. Event Delegation for Block Viewer
     const blockContent = document.getElementById('block-view-content');
     if (blockContent) {
@@ -3155,8 +3182,303 @@ function setupNavigation() {
     }
 }
 
+// ─── Headways View ───
+
+const CHART_ROW_H = 36;
+const CHART_Y_AXIS_W = 190;
+const CHART_HEADER_H = 34;
+const CHART_PIXELS_PER_MINUTE = 1.5;
+
+function ensureHeadwayRouteOptions() {
+    const select = document.getElementById('headway-route-select') as HTMLSelectElement | null;
+    if (!select) return;
+    if (select.options.length > 1) return;
+    select.innerHTML = '<option value="">Select route...</option>' + allRoutes
+        .map(r => `<option value="${r.route_id}">${r.route_short_name} — ${r.route_long_name}</option>`)
+        .join('');
+    select.value = headwayRouteId ?? '';
+    updateHeadwayDirectionOptions();
+}
+
+function updateHeadwayDirectionOptions() {
+    const dirSelect = document.getElementById('headway-direction-select') as HTMLSelectElement | null;
+    if (!dirSelect) return;
+    const route = allRoutes.find(r => r.route_id === headwayRouteId);
+    const dirs = route?.directions ?? {};
+    let html = '<option value="">All directions</option>';
+    Object.entries(dirs).forEach(([id, name]) => {
+        html += `<option value="${id}">${name}</option>`;
+    });
+    dirSelect.innerHTML = html;
+    dirSelect.value = headwayDirection === '' ? '' : String(headwayDirection);
+}
+
+async function loadHeadwaysView() {
+    ensureHeadwayRouteOptions();
+    if (headwayRouteId) await refreshHeadways();
+    startHeadwayPolling();
+}
+
+function startHeadwayPolling() {
+    if (!headwayTimer) {
+        headwayTimer = setInterval(() => { if (headwayRouteId) refreshHeadways(); }, 5000);
+    }
+}
+
+function stopHeadwayPolling() {
+    if (headwayTimer) {
+        clearInterval(headwayTimer);
+        headwayTimer = null;
+    }
+}
+
+async function refreshHeadways() {
+    if (!headwayRouteId) return;
+    try {
+        const data = await api.getHeadways(headwayRouteId, headwayDirection === '' ? undefined : Number(headwayDirection));
+        headwayData = data;
+        renderHeadways(data);
+    } catch (err) {
+        console.error('Failed to load headways:', err);
+        const el = document.getElementById('headway-chart-container');
+        if (el) el.innerHTML = `<p class="empty-state" style="color:var(--accent-red);padding:24px">Failed to load headways: ${(err as Error).message}</p>`;
+    }
+}
+
+function renderHeadways(data: HeadwayData) {
+    renderHeadwaySummary(data);
+    renderHeadwayChart(data);
+    renderHeadwayTable(data);
+}
+
+function renderHeadwaySummary(data: HeadwayData) {
+    const el = document.getElementById('headway-summary');
+    if (!el) return;
+    const counts: Record<string, number> = { NORMAL: 0, BUNCHED: 0, GAPPED: 0, STALE: 0, UNKNOWN: 0 };
+    for (const v of data.vehicles) counts[v.headwayStatus] = (counts[v.headwayStatus] || 0) + 1;
+
+    const updated = new Date(data.timestamp);
+    const updatedStr = updated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    el.innerHTML = `
+        <div class="headway-card">
+          <div class="headway-card-label">Target Headway</div>
+          <div class="headway-card-value">${formatDuration(data.targetHeadwaySeconds)}</div>
+        </div>
+        <div class="headway-card headway-card-normal">
+          <div class="headway-card-label">Normal</div>
+          <div class="headway-card-value">${counts.NORMAL}</div>
+        </div>
+        <div class="headway-card headway-card-bunched">
+          <div class="headway-card-label">Bunched</div>
+          <div class="headway-card-value">${counts.BUNCHED}</div>
+        </div>
+        <div class="headway-card headway-card-gapped">
+          <div class="headway-card-label">Gapped</div>
+          <div class="headway-card-value">${counts.GAPPED}</div>
+        </div>
+        <div class="headway-card headway-card-stale">
+          <div class="headway-card-label">Stale</div>
+          <div class="headway-card-value">${counts.STALE}</div>
+        </div>
+        <div class="headway-card headway-card-unknown">
+          <div class="headway-card-label">Unknown</div>
+          <div class="headway-card-value">${counts.UNKNOWN}</div>
+        </div>
+        <div class="headway-meta">
+          <span>${data.vehicles.length} vehicles</span>
+          <span>Updated ${updatedStr}</span>
+          ${data.warnings.length ? `<span style="color:var(--accent-orange)">${data.warnings.join('; ')}</span>` : ''}
+        </div>`;
+}
+
+function renderHeadwayChart(data: HeadwayData) {
+    const container = document.getElementById('headway-chart-container');
+    if (!container) return;
+
+    if (data.controlPoints.length === 0 || data.vehicles.length === 0) {
+        container.innerHTML = `<p class="empty-state" style="padding:24px">${data.warnings.join(' ') || 'No data to display'}</p>`;
+        return;
+    }
+
+    // Control point index map (stopId -> y index)
+    const ctrlIndex = new Map<string, number>();
+    data.controlPoints.forEach((cp, i) => ctrlIndex.set(cp.stopId, i));
+
+    // Build per-vehicle polylines limited to control-point stops
+    const vehicleLines: { vehicle: HeadwayData['vehicles'][number]; pts: { t: number; y: number; seq: number }[] }[] = [];
+
+    let minTime = Infinity;
+    let maxTime = -Infinity;
+    for (const v of data.vehicles) {
+        const pts: { t: number; y: number; seq: number }[] = [];
+        for (const p of v.points) {
+            const yIdx = ctrlIndex.get(p.stopId);
+            if (yIdx === undefined) continue;
+            pts.push({ t: p.predictedArrival, y: yIdx, seq: p.stopSequence });
+            if (p.predictedArrival < minTime) minTime = p.predictedArrival;
+            if (p.predictedArrival > maxTime) maxTime = p.predictedArrival;
+        }
+        if (pts.length > 0) vehicleLines.push({ vehicle: v, pts });
+    }
+
+    if (vehicleLines.length === 0 || !isFinite(minTime) || !isFinite(maxTime)) {
+        container.innerHTML = `<p class="empty-state" style="padding:24px">No predictable trajectory available for these vehicles</p>`;
+        return;
+    }
+
+    // Time window with margin; clamp to 6h to avoid pathological ranges
+    const marginSec = 5 * 60;
+    let t0 = minTime - marginSec;
+    let t1 = maxTime + marginSec;
+    if (t1 - t0 > 6 * 3600) {
+        const center = (t0 + t1) / 2;
+        t0 = center - 3 * 3600;
+        t1 = center + 3 * 3600;
+    }
+
+    const chartW = ((t1 - t0) / 60) * CHART_PIXELS_PER_MINUTE;
+    const chartH = CHART_HEADER_H + data.controlPoints.length * CHART_ROW_H;
+    const totalW = CHART_Y_AXIS_W + chartW;
+
+    const xOf = (t: number) => CHART_Y_AXIS_W + ((t - t0) / 60) * CHART_PIXELS_PER_MINUTE;
+    const yOf = (idx: number) => CHART_HEADER_H + idx * CHART_ROW_H + CHART_ROW_H / 2;
+
+    const statusColor = (s: HeadwayStatus) => {
+        switch (s) {
+            case 'BUNCHED': return 'var(--accent-red)';
+            case 'GAPPED': return 'var(--accent-orange)';
+            case 'STALE': return 'var(--text-muted)';
+            case 'UNKNOWN': return 'var(--text-secondary)';
+            default: return 'var(--accent-blue)';
+        }
+    };
+
+    let svg = `<svg width="${totalW}" height="${chartH}" class="headway-svg" style="min-width:${totalW}px;min-height:${chartH}px">`;
+
+    // Grid + y-axis labels
+    for (let i = 0; i < data.controlPoints.length; i++) {
+        const y = CHART_HEADER_H + i * CHART_ROW_H;
+        svg += `<line x1="${CHART_Y_AXIS_W}" y1="${y}" x2="${totalW}" y2="${y}" class="headway-grid-h" />`;
+        const fullName = data.controlPoints[i].stopName;
+        const name = fullName.length > 26 ? fullName.slice(0, 25) + '…' : fullName;
+        svg += `<text x="6" y="${y + CHART_ROW_H / 2 + 4}" class="headway-axis-label">${escapeXml(name)}</text>`;
+    }
+
+    // x-axis time markers every 15 min
+    const stepSec = 15 * 60;
+    for (let t = Math.ceil(t0 / stepSec) * stepSec; t <= t1; t += stepSec) {
+        const x = xOf(t);
+        svg += `<line x1="${x}" y1="${CHART_HEADER_H}" x2="${x}" y2="${chartH}" class="headway-grid-v" />`;
+        svg += `<text x="${x + 4}" y="16" class="headway-axis-time">${formatClock(t)}</text>`;
+    }
+
+    // Vehicle polylines + current-position markers
+    for (const { vehicle: v, pts } of vehicleLines) {
+        const sorted = [...pts].sort((a, b) => a.seq - b.seq);
+        const color = statusColor(v.headwayStatus);
+        const pointsStr = sorted.map(p => `${xOf(p.t).toFixed(1)},${yOf(p.y).toFixed(1)}`).join(' ');
+        svg += `<polyline points="${pointsStr}" style="fill:none;stroke:${color};stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round" class="headway-line" />`;
+        // current position marker: first point at/after current stop index
+        const current = sorted.find(p => p.seq - 1 >= v.currentStopIndex);
+        const marker = current ?? sorted[sorted.length - 1];
+        svg += `<circle cx="${xOf(marker.t).toFixed(1)}" cy="${yOf(marker.y).toFixed(1)}" r="6" style="fill:${color};stroke:var(--bg-primary);stroke-width:2" />`;
+    }
+
+    svg += `</svg>`;
+
+    container.innerHTML = `
+        <div class="headway-chart-wrap" style="width:${totalW}px">
+            ${svg}
+        </div>`;
+}
+
+function renderHeadwayTable(data: HeadwayData) {
+    const el = document.getElementById('headway-table-container');
+    if (!el) return;
+
+    if (data.vehicles.length === 0) {
+        el.innerHTML = '';
+        return;
+    }
+
+    const rows = data.vehicles.map(v => {
+        const statusClass = `headway-status-${v.headwayStatus.toLowerCase()}`;
+        return `<tr class="${statusClass}">
+            <td><strong>${escapeXml(v.vehicleId)}</strong></td>
+            <td>${escapeXml(v.tripId)}</td>
+            <td>${v.status}</td>
+            <td class="headway-num">${formatDuration(v.headwayAheadSeconds)}</td>
+            <td class="headway-num">${formatDuration(v.headwayBehindSeconds)}</td>
+            <td class="headway-num">${formatDuration(v.targetHeadwaySeconds)}</td>
+            <td>${v.delaySeconds !== null ? fmtSignedSeconds(v.delaySeconds) : '—'}</td>
+            <td>${headwayStatusLabel(v.headwayStatus)}</td>
+            <td>${v.currentStopId ? escapeXml(v.currentStopId) : '—'}</td>
+            <td>${formatAge(v.lastUpdateTime)}</td>
+        </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+        <div class="headway-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Vehicle</th>
+                        <th>Trip</th>
+                        <th>State</th>
+                        <th>Headway Ahead</th>
+                        <th>Headway Behind</th>
+                        <th>Target</th>
+                        <th>Delay</th>
+                        <th>Status</th>
+                        <th>Next Stop</th>
+                        <th>Age</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+}
+
+function formatDuration(seconds: number | null): string {
+    if (seconds === null || isNaN(seconds)) return '—';
+    const s = Math.round(seconds);
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+function fmtSignedSeconds(seconds: number): string {
+    const s = Math.round(seconds);
+    const sign = s < 0 ? '-' : '+';
+    const abs = Math.abs(s);
+    const m = Math.floor(abs / 60);
+    const r = abs % 60;
+    return `${sign}${m}:${String(r).padStart(2, '0')}`;
+}
+
+function headwayStatusLabel(s: HeadwayStatus): string {
+    return s.charAt(0) + s.slice(1).toLowerCase();
+}
+
+function formatAge(ms: number): string {
+    const age = Date.now() - ms;
+    if (age < 0) return 'now';
+    const s = Math.floor(age / 1000);
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function formatClock(epochSec: number): string {
+    return new Date(epochSec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function escapeXml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
 function switchView(viewName: string) {
-    if (viewName !== 'map' && viewName !== 'blocks' && viewName !== 'cancelled') return;
+    if (viewName !== 'map' && viewName !== 'blocks' && viewName !== 'cancelled' && viewName !== 'headways') return;
     activeView = viewName;
 
     // Update Nav State
@@ -3182,6 +3504,13 @@ function switchView(viewName: string) {
         loadBlockView();
     } else if (viewName === 'cancelled') {
         loadCancelledTrips();
+    } else if (viewName === 'headways') {
+        loadHeadwaysView();
+    }
+
+    // Stop headway polling when leaving the view
+    if (viewName !== 'headways') {
+        stopHeadwayPolling();
     }
 }
 
