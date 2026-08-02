@@ -261,6 +261,25 @@ export class GTFSRepository {
     }
 
     /**
+     * Weekly service-frequency patterns from calendar.txt.
+     * Returns service_id -> active weekday (Mon-Fri) and weekend (Sat/Sun) day
+     * counts. Used to weight topology trip counts so weekday service dominates.
+     */
+    getServiceWeekPatterns(): Map<string, { weekdayCount: number; weekendCount: number }> {
+        const rows = this.db.prepare(
+            'SELECT service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday FROM calendar'
+        ).all() as { service_id: string; monday: number; tuesday: number; wednesday: number; thursday: number; friday: number; saturday: number; sunday: number }[];
+        const map = new Map<string, { weekdayCount: number; weekendCount: number }>();
+        for (const r of rows) {
+            map.set(r.service_id, {
+                weekdayCount: r.monday + r.tuesday + r.wednesday + r.thursday + r.friday,
+                weekendCount: r.saturday + r.sunday,
+            });
+        }
+        return map;
+    }
+
+    /**
      * Get all unique shape IDs for a route/direction
      */
     getRouteShapeIds(routeId: string, directionId: number): string[] {
