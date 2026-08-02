@@ -3680,6 +3680,10 @@ function renderHeadwayTable(data: HeadwayData) {
 
     const rows = data.vehicles.map(v => {
         const statusClass = `headway-status-${v.headwayStatus.toLowerCase()}`;
+        const nextStop = v.currentStopId ? v.points.find(p => p.stopId === v.currentStopId) : null;
+        const nextStopHtml = nextStop
+            ? `${escapeXml(nextStop.stopName)} <span class="headway-muted">(${escapeXml(nextStop.stopId)})</span>`
+            : v.currentStopId ? escapeXml(v.currentStopId) : '—';
         return `<tr class="${statusClass}">
             <td><strong>${escapeXml(v.vehicleId)}</strong></td>
             <td>${escapeXml(v.tripId)}</td>
@@ -3689,7 +3693,7 @@ function renderHeadwayTable(data: HeadwayData) {
             <td class="headway-num">${formatDuration(v.targetHeadwaySeconds)}</td>
             <td>${v.delaySeconds !== null ? fmtSignedSeconds(v.delaySeconds) : '—'}</td>
             <td>${headwayStatusLabel(v.headwayStatus)}</td>
-            <td>${v.currentStopId ? escapeXml(v.currentStopId) : '—'}</td>
+            <td>${nextStopHtml}</td>
             <td>${formatAge(v.lastUpdateTime)}</td>
         </tr>`;
     }).join('');

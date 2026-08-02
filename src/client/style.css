@@ -2734,6 +2734,11 @@ body.light-theme .block-label.all-selected {
   font-size: 10px;
 }
 
+.headway-muted {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .headway-table-container {
   max-height: 260px;
   overflow: auto;
