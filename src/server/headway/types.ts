@@ -32,6 +32,10 @@ export interface HeadwayVehicle {
     headwayBehindSeconds: number | null;
     targetHeadwaySeconds: number;
     headwayStatus: HeadwayStatus;
+    /** Vehicle immediately ahead on the route (per shared control-point ordering). */
+    leaderVehicleId: string | null;
+    /** Vehicle immediately behind on the route (per shared control-point ordering). */
+    followerVehicleId: string | null;
 }
 
 /** Y-axis reference stops shared across vehicles on a route/direction. */

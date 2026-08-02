@@ -92,12 +92,22 @@ export class HeadwayService {
                 headwayBehindSeconds: null,
                 targetHeadwaySeconds: 0,
                 headwayStatus: 'UNKNOWN' as HeadwayStatus,
+                leaderVehicleId: null,
+                followerVehicleId: null,
             });
         }
 
-        // Order vehicles by progress along route, front of route first.
-        // Progress is per-shape, so vehicles on different patterns are approximate.
-        const ordered = vehicleModels.sort((a, b) => b.progress - a.progress);
+        // Control points (shared stops) provide a route-position axis that is
+        // comparable across trip patterns — unlike per-shape `progress`.
+        const controlPoints = this.buildControlPoints(vehicleModels);
+        const ctrlIndex = new Map<string, number>();
+        controlPoints.forEach((cp, i) => ctrlIndex.set(cp.stopId, i));
+        const nowEpoch = Math.floor(now.getTime() / 1000);
+
+        // Order vehicles front-of-route first by their position on the control-point axis.
+        const ordered = vehicleModels.sort(
+            (a, b) => this.controlProgress(b, ctrlIndex, nowEpoch) - this.controlProgress(a, ctrlIndex, nowEpoch),
+        );
 
         const targetHeadway = this.computeTargetHeadway(routeId, directionId, now);
         const nowMs = now.getTime();
@@ -107,12 +117,13 @@ export class HeadwayService {
             v.targetHeadwaySeconds = targetHeadway;
             const ahead = ordered[i - 1];
             const behind = ordered[i + 1];
-            v.headwayAheadSeconds = ahead ? this.computeHeadwayBetween(ahead, v) : null;
-            v.headwayBehindSeconds = behind ? this.computeHeadwayBetween(v, behind) : null;
+            v.leaderVehicleId = ahead?.vehicleId ?? null;
+            v.followerVehicleId = behind?.vehicleId ?? null;
+            v.headwayAheadSeconds = this.sanitizeHeadway(ahead ? this.computeHeadwayBetween(ahead, v) : null);
+            v.headwayBehindSeconds = this.sanitizeHeadway(behind ? this.computeHeadwayBetween(v, behind) : null);
             v.headwayStatus = this.classifyStatus(v, nowMs);
         }
 
-        const controlPoints = this.buildControlPoints(ordered);
         for (const cp of controlPoints) {
             cp.scheduledHeadwaySeconds = this.scheduledHeadwayAtStop(routeId, directionId, cp.stopId, now);
         }
@@ -190,6 +201,49 @@ export class HeadwayService {
             }
         }
         return null;
+    }
+
+    /**
+     * Position of a vehicle along the shared control-point axis, comparable
+     * across trip patterns. Uses the last passed control point and the next
+     * upcoming control point, interpolating by predicted time between them.
+     */
+    private controlProgress(v: HeadwayVehicle, ctrlIndex: Map<string, number>, nowEpoch: number): number {
+        const pts = v.points
+            .filter(p => ctrlIndex.has(p.stopId))
+            .sort((a, b) => a.stopSequence - b.stopSequence);
+        if (pts.length === 0) return v.progress;
+
+        let prevIdx = -1;
+        let prevTime = 0;
+        let nextIdx = -1;
+        let nextTime = 0;
+        for (const p of pts) {
+            const ci = ctrlIndex.get(p.stopId)!;
+            const passed = p.stopSequence - 1 <= v.currentStopIndex;
+            if (passed) {
+                if (ci > prevIdx) { prevIdx = ci; prevTime = p.predictedArrival; }
+            } else if (nextIdx === -1 || ci < nextIdx) {
+                nextIdx = ci;
+                nextTime = p.predictedArrival;
+            }
+        }
+
+        if (prevIdx !== -1 && nextIdx !== -1) {
+            const span = nextTime - prevTime;
+            const frac = span > 0 ? Math.max(0, Math.min(1, (nowEpoch - prevTime) / span)) : 0.5;
+            return prevIdx + frac;
+        }
+        if (prevIdx !== -1) return prevIdx + 0.5;
+        if (nextIdx !== -1) return Math.max(0, nextIdx - 0.5);
+        return v.progress;
+    }
+
+    /** Reject headway values that indicate a broken ordering/prediction. */
+    private sanitizeHeadway(value: number | null): number | null {
+        if (value === null) return null;
+        if (Math.abs(value) > 2 * 3600) return null;
+        return Math.round(value);
     }
 
     /**

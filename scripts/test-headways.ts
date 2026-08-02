@@ -51,6 +51,8 @@ async function main() {
     assert(typeof res.timestamp === 'number' && res.timestamp > 0, 'response has timestamp');
     for (const v of res.vehicles) {
         assert(typeof v.progress === 'number', 'vehicle has progress');
+        assert(typeof v.leaderVehicleId === 'string' || v.leaderVehicleId === null, 'vehicle has leaderVehicleId');
+        assert(typeof v.followerVehicleId === 'string' || v.followerVehicleId === null, 'vehicle has followerVehicleId');
         assert(Array.isArray(v.points), 'vehicle has points');
         for (const p of v.points) {
             assert(p.stopId && p.stopSequence > 0, 'point has stopId + stopSequence');
