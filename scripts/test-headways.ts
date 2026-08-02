@@ -10,6 +10,7 @@ import { SimulationEngine } from '../src/server/simulation/engine.js';
 import { PredictionEngine } from '../src/server/realtime/predictions.js';
 import { FeedGenerator } from '../src/server/realtime/feed.js';
 import { HeadwayService } from '../src/server/headway/service.js';
+import { InstructionStore } from '../src/server/instructions/store.js';
 import { createApiRouter } from '../src/server/api/routes.js';
 
 function assert(cond: boolean, msg: string) {
@@ -24,6 +25,7 @@ async function main() {
     const repo = await loadGTFS();
     const detourStore = new DetourStore();
     const cancellationStore = new CancellationStore();
+    const instructionStore = new InstructionStore();
     const detourEngine = new DetourEngine(repo, detourStore);
     const simulation = new SimulationEngine(repo, detourEngine, detourStore);
     const predictions = new PredictionEngine(repo, simulation);
@@ -68,7 +70,7 @@ async function main() {
     // 5. HTTP route test
     const app = express();
     app.use(express.json());
-    app.use('/api', createApiRouter(repo, detourEngine, detourStore, simulation, feedGenerator, cancellationStore, headwayService));
+    app.use('/api', createApiRouter(repo, detourEngine, detourStore, simulation, feedGenerator, cancellationStore, headwayService, instructionStore));
     const server = createServer(app);
     await new Promise<void>(resolve => server.listen(0, resolve));
     const port = (server.address() as { port: number }).port;
@@ -90,6 +92,7 @@ async function main() {
     server.close();
     repo.close();
     console.log('\n✨ Headway Verification Passed');
+    process.exit(0);
 }
 
 main().catch(err => {
