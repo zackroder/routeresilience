@@ -34,7 +34,8 @@ export interface VehicleState {
     dwellEndTime: number;      // epoch ms (when stopped at a stop, when to depart)
 
     // Service control
-    holdUntilEpochMs?: number;        // epoch ms — hold applies at/from the next stop until this time
+    holdUntilEpochMs?: number;        // epoch ms — vehicle is held at a stop until this time
+    holdSecondsPending?: number;      // seconds to hold at the next stop (deferred hold)
     breakdownUntilEpochMs?: number;   // epoch ms — vehicle is frozen in place until this time
 
     // Schedule / operational

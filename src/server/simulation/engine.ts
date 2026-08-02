@@ -567,6 +567,13 @@ export class SimulationEngine implements VehicleDataSource {
 
             // Handle dwelling at stop
             if (vehicle.status === 'AT_STOP') {
+                // Apply a deferred hold when the vehicle arrives at the stop
+                if (vehicle.holdSecondsPending !== undefined) {
+                    const end = now + vehicle.holdSecondsPending * 1000;
+                    vehicle.dwellEndTime = Math.max(vehicle.dwellEndTime, end);
+                    vehicle.holdUntilEpochMs = end;
+                    vehicle.holdSecondsPending = undefined;
+                }
                 if (now >= vehicle.dwellEndTime) {
                     // Deferred hold: keep dwelling at the stop until the hold expires
                     if (vehicle.holdUntilEpochMs !== undefined && now < vehicle.holdUntilEpochMs) {
@@ -768,16 +775,19 @@ export class SimulationEngine implements VehicleDataSource {
 
     /**
      * Apply a service hold to a vehicle for `seconds`. If the vehicle is at a
-     * stop, the dwell is extended; otherwise the hold is deferred until the
-     * vehicle reaches its next stop.
+     * stop, the dwell is extended; otherwise the hold is deferred and applied
+     * when the vehicle reaches its next stop — guaranteeing `seconds` of hold
+     * AT the stop regardless of travel time to it.
      */
     applyHold(vehicleId: string, seconds: number): boolean {
         const vehicle = this.vehicles.get(vehicleId);
         if (!vehicle || vehicle.status === 'COMPLETED') return false;
-        const until = this.now() + seconds * 1000;
-        vehicle.holdUntilEpochMs = until;
-        if (vehicle.status === 'AT_STOP' && until > vehicle.dwellEndTime) {
-            vehicle.dwellEndTime = until;
+        const end = this.now() + seconds * 1000;
+        vehicle.holdSecondsPending = seconds;
+        vehicle.holdUntilEpochMs = end;
+        if (vehicle.status === 'AT_STOP') {
+            vehicle.dwellEndTime = Math.max(vehicle.dwellEndTime, end);
+            vehicle.holdSecondsPending = undefined;
         }
         return true;
     }
@@ -786,17 +796,25 @@ export class SimulationEngine implements VehicleDataSource {
     clearHold(vehicleId: string): boolean {
         const vehicle = this.vehicles.get(vehicleId);
         if (!vehicle) return false;
+        let changed = false;
+        if (vehicle.holdSecondsPending !== undefined) {
+            vehicle.holdSecondsPending = undefined;
+            changed = true;
+        }
         if (vehicle.holdUntilEpochMs !== undefined) {
             vehicle.holdUntilEpochMs = undefined;
-            return true;
+            changed = true;
         }
-        return false;
+        return changed;
     }
 
-    /** Whether a vehicle has an active (future) hold. */
+    /** Whether a vehicle has an active (pending or in-effect) hold. */
     isHeld(vehicleId: string): boolean {
         const vehicle = this.vehicles.get(vehicleId);
-        return !!vehicle && vehicle.holdUntilEpochMs !== undefined && vehicle.holdUntilEpochMs > this.now();
+        return !!vehicle && (
+            vehicle.holdSecondsPending !== undefined
+            || (vehicle.holdUntilEpochMs !== undefined && vehicle.holdUntilEpochMs > this.now())
+        );
     }
 
     /** Freeze a vehicle in place (even mid-route) for `seconds` to model a breakdown. */
