@@ -706,14 +706,21 @@ export class SimulationEngine implements VehicleDataSource {
             // Update bearing
             vehicle.bearing = this.calculateBearing(curr.lat, curr.lon, next.lat, next.lon);
 
-            // Check if near next stop — trigger dwell
-            if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length && vehicle.nextStopLat !== undefined && vehicle.nextStopLon !== undefined) {
-                const distToStop = haversineMeters(vehicle.lat, vehicle.lon, vehicle.nextStopLat, vehicle.nextStopLon);
-                if (distToStop < 30) { // within 30m of stop
+            // Check if near next stop — trigger dwell by proximity OR by having
+            // covered the segment distance to the stop (the proximity check can
+            // miss stops whose coordinates don't align closely with the shape).
+            if (vehicle.currentStopIndex < vehicle.cachedStopTimes.length) {
+                const distToStop = (vehicle.nextStopLat !== undefined && vehicle.nextStopLon !== undefined)
+                    ? haversineMeters(vehicle.lat, vehicle.lon, vehicle.nextStopLat, vehicle.nextStopLon)
+                    : Infinity;
+                const reachedByDistance = vehicle.segmentDistances !== undefined
+                    && vehicle.segmentDistances[vehicle.currentStopIndex + 1] !== undefined
+                    && vehicle.distanceTraveled >= vehicle.segmentDistances[vehicle.currentStopIndex + 1];
+                if (distToStop < 30 || reachedByDistance) {
                     vehicle.status = 'AT_STOP';
                     vehicle.dwellEndTime = now + STOP_DWELL_MS + (this.stopDwellAdjustMs.get(vehicle.nextStopId) ?? 0);
-                    vehicle.lat = vehicle.nextStopLat;
-                    vehicle.lon = vehicle.nextStopLon;
+                    if (vehicle.nextStopLat !== undefined) vehicle.lat = vehicle.nextStopLat;
+                    if (vehicle.nextStopLon !== undefined) vehicle.lon = vehicle.nextStopLon;
 
                     // Record arrival and compute schedule delay (always on so
                     // schedule-adherence is observable without debug mode).
