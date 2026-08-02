@@ -261,8 +261,21 @@ export interface HeadwayVehicle {
     headwayBehindSeconds: number | null;
     targetHeadwaySeconds: number;
     headwayStatus: HeadwayStatus;
+    axisPosition: number;
     leaderVehicleId: string | null;
     followerVehicleId: string | null;
+}
+
+export interface RouteBranch {
+    divergeStopId: string;
+    divergeStopName: string;
+    stops: HeadwayControlPoint[];
+    rejoinStopId: string | null;
+}
+
+export interface RouteTopology {
+    trunk: HeadwayControlPoint[];
+    branches: RouteBranch[];
 }
 
 export interface HeadwayControlPoint {
@@ -280,6 +293,7 @@ export interface HeadwayData {
     targetHeadwaySeconds: number;
     vehicles: HeadwayVehicle[];
     controlPoints: HeadwayControlPoint[];
+    topology: RouteTopology;
     warnings: string[];
 }
 

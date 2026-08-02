@@ -2588,6 +2588,13 @@ body.light-theme .block-label.all-selected {
   stroke-width: 3;
 }
 
+.headway-branch-line {
+  stroke: var(--accent-orange);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  opacity: 0.85;
+}
+
 .headway-stop-tick {
   stroke: var(--text-secondary);
   stroke-width: 2;

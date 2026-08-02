@@ -3274,6 +3274,7 @@ const STRIP_MIN_STOP_W = 44;
 const STRIP_MAX_STOP_W = 150;
 const STRIP_MIN_H = 200;
 const STOP_LABEL_CHAR_W = 5.6;
+const BRANCH_Y_OFFSET = 44;
 
 function ensureHeadwayRouteOptions() {
     const select = document.getElementById('headway-route-select') as HTMLSelectElement | null;
@@ -3439,12 +3440,16 @@ function renderHeadwayCharts(items: { data: HeadwayData; title: string }[]) {
 function buildHeadwayStrip(data: HeadwayData, title: string): string {
     const scrollEl = document.getElementById('headway-scroll');
 
-    if (data.controlPoints.length === 0 || data.vehicles.length === 0) {
+    // Full-route main sequence (trunk); fall back to control points.
+    const fullTrunk = data.topology?.trunk?.length ? data.topology.trunk : data.controlPoints;
+    const branches = data.topology?.branches ?? [];
+
+    if (fullTrunk.length === 0 || data.vehicles.length === 0) {
         return `<div class="headway-strip-empty">${escapeXml(title)}: no active vehicles</div>`;
     }
 
-    // Equally spaced subset of control stops along the x-axis
-    const stops = sampleStops(data.controlPoints, STRIP_MAX_STOPS);
+    // Equally spaced subset of trunk stops along the x-axis
+    const stops = sampleStops(fullTrunk, STRIP_MAX_STOPS);
     const n = stops.length;
     if (n < 2) {
         return `<div class="headway-strip-empty">${escapeXml(title)}: not enough control points</div>`;
@@ -3464,12 +3469,25 @@ function buildHeadwayStrip(data: HeadwayData, title: string): string {
     const xOf = (fraction: number) => STRIP_PAD_L + Math.max(0, Math.min(1, fraction)) * stripLen;
     const busY = STRIP_BUS_Y;
 
+    // Trunk fraction by stop id (normalized index in the FULL trunk)
+    const fullIdx = new Map<string, number>();
+    fullTrunk.forEach((cp, i) => fullIdx.set(cp.stopId, i));
+    const fullLen = Math.max(1, fullTrunk.length - 1);
+    const trunkFrac = (stopId: string) => {
+        const idx = fullIdx.get(stopId);
+        return idx !== undefined ? idx / fullLen : 0;
+    };
+
     // Labels sweep downward (rotate +35°) so they never cross the route line.
     const labelY = busY + 34;
     const labelBottom = rotated
         ? labelY + Math.min(220, maxNamePx(stops) * 0.58) + 14
         : labelY + 40;
-    const chartH = Math.max(STRIP_MIN_H, labelBottom);
+
+    // Branch bands sit below the trunk labels
+    const branchBandY = (k: number) => busY + 74 + BRANCH_Y_OFFSET * k;
+    const lastBranchBottom = branches.length > 0 ? branchBandY(branches.length - 1) + 40 : 0;
+    const chartH = Math.max(STRIP_MIN_H, labelBottom, lastBranchBottom);
 
     const statusColor = (s: HeadwayStatus) => {
         switch (s) {
@@ -3489,7 +3507,7 @@ function buildHeadwayStrip(data: HeadwayData, title: string): string {
     // Route line
     svg += `<line x1="${STRIP_PAD_L}" y1="${busY}" x2="${STRIP_PAD_L + stripLen}" y2="${busY}" class="headway-route-line" />`;
 
-    // Stops: ticks + full labels below the line
+    // Trunk stops: ticks + full labels below the line
     for (let i = 0; i < n; i++) {
         const x = xOf(i / (n - 1));
         svg += `<line x1="${x}" y1="${busY - 6}" x2="${x}" y2="${busY + 6}" class="headway-stop-tick" />`;
@@ -3503,10 +3521,10 @@ function buildHeadwayStrip(data: HeadwayData, title: string): string {
         }
     }
 
-    // Buses positioned by their progress along the route; scheduled/actual
+    // Buses positioned by their axis position along the trunk; scheduled/actual
     // headway shown above each bus.
     for (const v of data.vehicles) {
-        const frac = Math.max(0, Math.min(1, v.progress));
+        const frac = Math.max(0, Math.min(1, typeof v.axisPosition === 'number' ? v.axisPosition : v.progress));
         const x = xOf(frac);
         const color = statusColor(v.headwayStatus);
         const sched = scheduledAtFraction(stops, frac);
@@ -3520,6 +3538,33 @@ function buildHeadwayStrip(data: HeadwayData, title: string): string {
             <text x="${x}" y="${busY + 7}" text-anchor="middle" class="headway-bus-icon">🚌</text>
         </g>`;
     }
+
+    // Branches: parallel bands that diverge from (and may rejoin) the trunk
+    const maxX = totalW - STRIP_PAD_R;
+    branches.forEach((br, k) => {
+        const bandY = branchBandY(k);
+        const divergeX = xOf(trunkFrac(br.divergeStopId));
+        const rejoinIdx = br.rejoinStopId ? fullIdx.get(br.rejoinStopId) : undefined;
+        const rejoinX = rejoinIdx !== undefined ? xOf(rejoinIdx / fullLen) : null;
+
+        // scale branch stop spacing so the branch fits to the right of the diverge
+        const availRight = Math.max(STRIP_MIN_STOP_W, maxX - divergeX);
+        const spacing = Math.min(stopW, availRight / Math.max(1, br.stops.length));
+        const bx = (j: number) => Math.min(maxX, divergeX + (j + 1) * spacing);
+
+        // connector from diverge, along the band, and back to rejoin (if any)
+        let pts = `${divergeX},${busY}`;
+        br.stops.forEach((_, j) => { pts += ` ${bx(j)},${bandY}`; });
+        if (rejoinX !== null) pts += ` ${rejoinX},${busY}`;
+        svg += `<polyline points="${pts}" fill="none" class="headway-branch-line" />`;
+
+        br.stops.forEach((bs, j) => {
+            const x = bx(j);
+            svg += `<line x1="${x}" y1="${bandY - 5}" x2="${x}" y2="${bandY + 5}" class="headway-stop-tick" />`;
+            const name = bs.stopName.length > 14 ? bs.stopName.slice(0, 13) + '…' : bs.stopName;
+            svg += `<text x="${x}" y="${bandY + 16}" text-anchor="middle" class="headway-stop-label">${escapeXml(name)}</text>`;
+        });
+    });
 
     svg += `</svg>`;
 
@@ -3581,6 +3626,7 @@ function mergeHeadwayData(d0: HeadwayData, d1: HeadwayData): HeadwayData {
         const existing = byStop.get(cp.stopId);
         if (!existing || cp.stopSequence < existing.stopSequence) byStop.set(cp.stopId, cp);
     }
+    const controlPoints = Array.from(byStop.values()).sort((a, b) => a.stopSequence - b.stopSequence);
     return {
         route: d0.route,
         directionId: null,
@@ -3588,7 +3634,8 @@ function mergeHeadwayData(d0: HeadwayData, d1: HeadwayData): HeadwayData {
         date: d0.date,
         targetHeadwaySeconds: d0.targetHeadwaySeconds > 0 ? d0.targetHeadwaySeconds : d1.targetHeadwaySeconds,
         vehicles,
-        controlPoints: Array.from(byStop.values()).sort((a, b) => a.stopSequence - b.stopSequence),
+        controlPoints,
+        topology: { trunk: controlPoints, branches: [] },
         warnings: [...d0.warnings, ...d1.warnings],
     };
 }
