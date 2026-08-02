@@ -39,6 +39,8 @@ export interface HeadwayControlPoint {
     stopId: string;
     stopName: string;
     stopSequence: number;
+    /** Scheduled headway (median consecutive departures) at this stop, or null if unknown. */
+    scheduledHeadwaySeconds: number | null;
 }
 
 export interface HeadwaysResponse {
@@ -55,4 +57,24 @@ export interface HeadwaysResponse {
     vehicles: HeadwayVehicle[];
     controlPoints: HeadwayControlPoint[];
     warnings: string[];
+}
+
+/** A proposed service-restoration action for a dispatcher to review. */
+export interface Recommendation {
+    id: string;
+    vehicleId: string;
+    tripId: string;
+    routeId: string;
+    action: 'HOLD';
+    controlPointStopId: string;
+    controlPointStopName: string;
+    holdSeconds: number;
+    currentHeadwaySeconds: number;
+    targetHeadwaySeconds: number;
+    expectedHeadwaySeconds: number;
+    reason: string;
+    confidence: number;
+    createdAt: number;  // epoch ms
+    expiresAt: number;  // epoch ms
+    status: 'PENDING';
 }

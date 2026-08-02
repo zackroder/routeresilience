@@ -6,6 +6,7 @@ import {
     HeadwayStatus,
     HeadwayVehicle,
     HeadwaysResponse,
+    Recommendation,
 } from './types.js';
 
 const STALE_THRESHOLD_MS = 120_000;
@@ -14,6 +15,9 @@ const HEADWAY_WINDOW_HOURS = 3;
 const MAX_CONTROL_POINTS = 80;
 const TARGET_LOW_FACTOR = 0.6;
 const TARGET_HIGH_FACTOR = 1.4;
+const MIN_HOLD_S = 15;
+const MAX_HOLD_S = 180;
+const RECOMMENDATION_TTL_MS = 60_000;
 
 function fmtDate(d: Date): string {
     const y = d.getFullYear();
@@ -24,6 +28,13 @@ function fmtDate(d: Date): string {
 
 function secondsSinceMidnight(d: Date): number {
     return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+}
+
+function fmtSeconds(seconds: number): string {
+    const s = Math.round(seconds);
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, '0')}`;
 }
 
 /**
@@ -102,6 +113,9 @@ export class HeadwayService {
         }
 
         const controlPoints = this.buildControlPoints(ordered);
+        for (const cp of controlPoints) {
+            cp.scheduledHeadwaySeconds = this.scheduledHeadwayAtStop(routeId, directionId, cp.stopId, now);
+        }
 
         if (ordered.length === 0) {
             warnings.push(
@@ -124,6 +138,58 @@ export class HeadwayService {
             controlPoints,
             warnings,
         };
+    }
+
+    /**
+     * Propose service-restoration actions from current headway state.
+     * Currently: HOLD recommendations for bunched vehicles, measured at the
+     * vehicle's next upcoming stop, sized to restore the target headway.
+     */
+    getRecommendations(routeId: string, directionId?: number, now: Date = new Date()): Recommendation[] {
+        const data = this.getHeadways(routeId, directionId, now);
+        const nowMs = now.getTime();
+        const recommendations: Recommendation[] = [];
+
+        for (const v of data.vehicles) {
+            if (v.headwayStatus !== 'BUNCHED' || v.headwayAheadSeconds === null) continue;
+
+            const nextStop = this.nextControlPoint(v);
+            if (!nextStop) continue;
+
+            const deficit = v.targetHeadwaySeconds - v.headwayAheadSeconds;
+            const hold = Math.min(MAX_HOLD_S, Math.max(MIN_HOLD_S, Math.round(deficit)));
+            const expected = v.headwayAheadSeconds + hold;
+
+            recommendations.push({
+                id: `rec_${v.vehicleId}_${nowMs}`,
+                vehicleId: v.vehicleId,
+                tripId: v.tripId,
+                routeId: v.routeId,
+                action: 'HOLD',
+                controlPointStopId: nextStop.stopId,
+                controlPointStopName: nextStop.stopName,
+                holdSeconds: hold,
+                currentHeadwaySeconds: Math.round(v.headwayAheadSeconds),
+                targetHeadwaySeconds: v.targetHeadwaySeconds,
+                expectedHeadwaySeconds: Math.round(expected),
+                reason: `Vehicle ${v.vehicleId} is bunched (${fmtSeconds(v.headwayAheadSeconds)} vs ${fmtSeconds(v.targetHeadwaySeconds)} target). Hold ${hold}s at ${nextStop.stopName} to restore spacing.`,
+                confidence: 0.8,
+                createdAt: nowMs,
+                expiresAt: nowMs + RECOMMENDATION_TTL_MS,
+                status: 'PENDING',
+            });
+        }
+
+        return recommendations;
+    }
+
+    private nextControlPoint(v: HeadwayVehicle): HeadwayControlPoint | null {
+        for (const p of v.points) {
+            if (p.stopSequence - 1 >= v.currentStopIndex) {
+                return { stopId: p.stopId, stopName: p.stopName, stopSequence: p.stopSequence, scheduledHeadwaySeconds: null };
+            }
+        }
+        return null;
     }
 
     /**
@@ -167,9 +233,66 @@ export class HeadwayService {
             }
         }
         return Array.from(byStop.entries())
-            .map(([stopId, info]) => ({ stopId, stopName: info.stopName, stopSequence: info.minSeq }))
+            .map(([stopId, info]) => ({
+                stopId,
+                stopName: info.stopName,
+                stopSequence: info.minSeq,
+                scheduledHeadwaySeconds: null,
+            }))
             .sort((a, b) => a.stopSequence - b.stopSequence)
             .slice(0, MAX_CONTROL_POINTS);
+    }
+
+    /** Scheduled headway at a single stop (median of consecutive scheduled departures). */
+    private scheduledHeadwayAtStop(
+        routeId: string,
+        directionId: number | undefined,
+        stopId: string,
+        now: Date,
+    ): number | null {
+        const dirs = directionId !== undefined ? [directionId] : [0, 1];
+        for (const dir of dirs) {
+            const h = this.scheduledHeadwayAtStopForDirection(routeId, dir, stopId, now);
+            if (h !== null) return h;
+        }
+        return null;
+    }
+
+    private scheduledHeadwayAtStopForDirection(
+        routeId: string,
+        directionId: number,
+        stopId: string,
+        now: Date,
+    ): number | null {
+        const dateStr = fmtDate(now);
+        const nowSec = secondsSinceMidnight(now);
+        const lo = nowSec - HEADWAY_WINDOW_HOURS * 3600;
+        const hi = nowSec + HEADWAY_WINDOW_HOURS * 3600;
+
+        const trips = this.repo
+            .getTripsForRoute(routeId, directionId)
+            .filter(t => this.repo.isServiceActiveToday(t.service_id, dateStr))
+            .filter(t => t.start_time >= lo && t.start_time <= hi);
+
+        const times: number[] = [];
+        for (const t of trips) {
+            const st = this.repo.getStopTimes(t.trip_id).find(s => s.stop_id === stopId);
+            if (st) times.push(st.departure_time);
+        }
+        if (times.length < 2) return null;
+
+        times.sort((a, b) => a - b);
+        const diffs: number[] = [];
+        for (let i = 1; i < times.length; i++) {
+            const d = times[i] - times[i - 1];
+            if (d > 0) diffs.push(d);
+        }
+        if (diffs.length === 0) return null;
+
+        diffs.sort((a, b) => a - b);
+        const mid = Math.floor(diffs.length / 2);
+        const median = diffs.length % 2 === 0 ? (diffs[mid - 1] + diffs[mid]) / 2 : diffs[mid];
+        return Math.max(30, Math.round(median));
     }
 
     private computeTargetHeadway(routeId: string, directionId: number | undefined, now: Date): number {
