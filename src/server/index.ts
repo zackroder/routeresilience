@@ -10,6 +10,7 @@ import { DetourStore } from './detour/store.js';
 import { SimulationEngine } from './simulation/engine.js';
 import { FeedGenerator } from './realtime/feed.js';
 import { PredictionEngine } from './realtime/predictions.js';
+import { HeadwayService } from './headway/service.js';
 import { apiKeyMiddleware, rateLimitMiddleware } from './api/middleware.js';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4000;
@@ -28,6 +29,7 @@ async function main() {
     const detourEngine = new DetourEngine(repo, detourStore);
     const simulation = new SimulationEngine(repo, detourEngine, detourStore);
     const predictions = new PredictionEngine(repo, simulation);
+    const headwayService = new HeadwayService(repo, simulation, predictions);
     const feedGenerator = new FeedGenerator(repo, detourEngine, detourStore, simulation, predictions, cancellationStore);
 
     // ─── 3. Start Simulation ───
@@ -46,7 +48,7 @@ async function main() {
     app.use('/api', apiKeyMiddleware);
     app.use('/api', rateLimitMiddleware);
 
-    const apiRouter = createApiRouter(repo, detourEngine, detourStore, simulation, feedGenerator, cancellationStore);
+    const apiRouter = createApiRouter(repo, detourEngine, detourStore, simulation, feedGenerator, cancellationStore, headwayService);
     app.use('/api', apiRouter);
 
     // Serve static frontend files in production

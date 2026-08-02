@@ -9,6 +9,7 @@ import { CreateDetourRequest } from '../detour/types.js';
 import { SimulationEngine } from '../simulation/engine.js';
 import { FeedGenerator } from '../realtime/feed.js';
 import { CancellationStore } from '../detour/cancellations.js';
+import { HeadwayService } from '../headway/service.js';
 
 export function createApiRouter(
     repo: GTFSRepository,
@@ -17,6 +18,7 @@ export function createApiRouter(
     simulation: SimulationEngine,
     feedGenerator: FeedGenerator,
     cancellationStore: CancellationStore,
+    headwayService: HeadwayService,
 ): Router {
     const router = Router();
 
@@ -670,6 +672,34 @@ export function createApiRouter(
             activeDetours: detourStore.getActive().length,
             totalDetours: detourStore.getAll().length,
         });
+    });
+
+    // ─── Headway Routes ───
+
+    /** Headway analysis for a route/direction (time-space chart data) */
+    router.get('/headways', (req: Request, res: Response) => {
+        const routeId = req.query.route_id as string | undefined;
+        if (!routeId) {
+            res.status(400).json({ error: 'route_id query parameter is required' });
+            return;
+        }
+        let directionId: number | undefined;
+        if (req.query.direction !== undefined) {
+            directionId = parseInt(req.query.direction as string, 10);
+            if (isNaN(directionId)) {
+                res.status(400).json({ error: 'direction must be a number' });
+                return;
+            }
+        }
+        try {
+            res.json(headwayService.getHeadways(routeId, directionId, new Date()));
+        } catch (err) {
+            if ((err as Error).message === 'Route not found') {
+                res.status(404).json({ error: 'Route not found' });
+                return;
+            }
+            res.status(500).json({ error: (err as Error).message });
+        }
     });
 
     return router;
