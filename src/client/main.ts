@@ -67,6 +67,7 @@ let currentInstructions: OperatorInstruction[] = [];
 const actedRecKeys = new Set<string>();
 let headwayChartItems: { data: HeadwayData; title: string }[] | null = null;
 let headwayResizeTimer: ReturnType<typeof setTimeout> | null = null;
+let headwayRequestSeq = 0;
 
 // Detour expansion state
 let expandedDetourIds = new Set<string>();
@@ -3320,13 +3321,19 @@ function stopHeadwayPolling() {
 
 async function refreshHeadways() {
     if (!headwayRouteId) return;
+    // Guard against stale responses overwriting the view after a route switch
+    const seq = ++headwayRequestSeq;
+    const reqRoute = headwayRouteId;
+    const reqDir = headwayDirection;
+    const isStale = () => seq !== headwayRequestSeq || headwayRouteId !== reqRoute || headwayDirection !== reqDir;
     try {
-        if (headwayDirection === '') {
+        if (reqDir === '') {
             // All directions: fetch per-direction strips, merge for summary/table
             const [d0, d1] = await Promise.all([
-                api.getHeadways(headwayRouteId, 0),
-                api.getHeadways(headwayRouteId, 1),
+                api.getHeadways(reqRoute, 0),
+                api.getHeadways(reqRoute, 1),
             ]);
+            if (isStale()) return;
             const merged = mergeHeadwayData(d0, d1);
             headwayData = merged;
             renderHeadways(merged, [
@@ -3334,21 +3341,24 @@ async function refreshHeadways() {
                 { data: d1, title: chartTitle(d1, 1) },
             ]);
         } else {
-            const data = await api.getHeadways(headwayRouteId, Number(headwayDirection));
+            const data = await api.getHeadways(reqRoute, Number(reqDir));
+            if (isStale()) return;
             headwayData = data;
             renderHeadways(data);
         }
     } catch (err) {
+        if (isStale()) return;
         console.error('Failed to load headways:', err);
         const el = document.getElementById('headway-chart-container');
         if (el) el.innerHTML = `<p class="empty-state" style="color:var(--accent-red);padding:24px">Failed to load headways: ${(err as Error).message}</p>`;
     }
-    await refreshRecommendations();
+    await refreshRecommendations(seq, reqRoute, reqDir);
     await refreshInstructions();
 }
 
-async function refreshRecommendations() {
+async function refreshRecommendations(seq?: number, reqRoute?: string, reqDir?: number | '') {
     if (!headwayRouteId) return;
+    if (seq !== undefined && (seq !== headwayRequestSeq || headwayRouteId !== reqRoute || headwayDirection !== reqDir)) return;
     try {
         const data = await api.getRecommendations(headwayRouteId, headwayDirection === '' ? undefined : Number(headwayDirection));
         currentRecommendations = data.recommendations;
