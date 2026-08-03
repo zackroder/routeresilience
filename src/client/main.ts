@@ -3353,7 +3353,8 @@ async function refreshHeadways() {
         const el = document.getElementById('headway-chart-container');
         if (el) el.innerHTML = `<p class="empty-state" style="color:var(--accent-red);padding:24px">Failed to load headways: ${(err as Error).message}</p>`;
     }
-    await refreshRecommendations(seq, reqRoute, reqDir);
+    // Recommendations disabled for now
+    // await refreshRecommendations(seq, reqRoute, reqDir);
     await refreshInstructions();
 }
 
