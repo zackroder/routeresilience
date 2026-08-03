@@ -9,15 +9,35 @@
 - **Start production**: `npm start`
 - **Dev server only**: `npm run dev:server`
 - **Dev client only**: `npm run dev:client`
+- **Testing**: 
+  - `npm test` - Run tests in watch mode
+  - `npm run test:run` - Run tests once
+  - `npm run test:coverage` - Run tests with coverage report
+- **Linting**:
+  - `npm run lint` - Check code quality
+  - `npm run lint:fix` - Auto-fix lint errors
+- **Formatting**:
+  - `npm run format` - Format code with Prettier
+  - `npm run format:check` - Check formatting without changes
 
 ## Test Conventions
 
-- **No automated test framework** currently configured
-- Manual test scripts exist in `src/test/` (unit, e2e, verification)
-- Test files use `.test.ts` extension
-- Tests import from source with `.js` extension (ES modules)
-- If adding tests, follow existing pattern in `src/test/unit/GTFSRepository.test.ts`
-- Consider adding a test framework (vitest, jest) before writing extensive new tests
+- **Test framework**: Vitest (configured in `vitest.config.ts`)
+- **Test directories**: 
+  - `src/test/unit/` - Fast, isolated tests with mocks
+  - `src/test/integration/` - Full stack tests with real database
+  - `src/test/fixtures/` - Test data (Google sample GTFS feed)
+  - `src/test/helpers/` - Test utilities
+- **Test file naming**: `*.test.ts` extension
+- **Test imports**: Use `.js` extension (ES modules)
+- **Test commands**:
+  - `npm test` - Run tests in watch mode
+  - `npm run test:run` - Run tests once
+  - `npm run test:coverage` - Run tests with coverage report
+- **Test data**: Google sample GTFS feed in `test/fixtures/gtfs-sample.zip`
+- **Test isolation**: Each test suite uses temporary database, never development data
+- **Mocking**: Use `nock` or `msw` for HTTP mocking (OSRM, external APIs)
+- **Manual test scripts**: Exist in `scripts/` for verification, not automated tests
 
 ## Architecture Boundaries
 
@@ -107,9 +127,30 @@
 - Reference issue numbers when applicable
 
 ### Branch Strategy
-- `dev` - Main development branch
-- `feature/*` - Feature branches (like current `feature/service-management-console`)
-- Merge features back to `dev` when complete
+- `main` - Production branch (stable, deployed)
+- `dev` - Main development branch (integration branch)
+- `feature/*` - Feature branches (e.g., `feature/service-management-console`)
+- `fix/*` - Bug fix branches
+- `chore/*` - Infrastructure/tooling branches
+
+### Workflow
+1. **Feature branches → dev**: Use PRs for all feature merges
+   - Ensures CI passes (tests, lint, build)
+   - Provides code review opportunity (even self-review)
+   - Creates clear history and documentation
+   - Easy to revert if issues arise
+   
+2. **dev → main**: Use PRs for production releases
+   - Only merge when dev is stable and tested
+   - Tag releases: `v1.0.0`, `v1.1.0`, etc.
+   - Consider release notes
+
+3. **Hotfixes**: Direct to main only for urgent production fixes
+   - Cherry-pick back to dev immediately after
+
+### Cleanup
+- Delete feature branches after merge (local and remote)
+- Keep dev and main branches clean
 
 ### Before Committing
 - Ensure code builds: `npm run build`
