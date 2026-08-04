@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { InstructionStore } from '../../../server/instructions/store.js'
 import type { CreateInstructionInput } from '../../../server/instructions/types.js'
 import { createTempDir } from '../../helpers/database.js'
@@ -48,12 +48,22 @@ describe('InstructionStore', () => {
   })
 
   it('gets and lists instructions newest-first', () => {
-    const a = store.create(input)
-    const b = store.create({ ...input, vehicleId: 'v2' })
-    const all = store.listAll()
-    expect(all[0].id).toBe(b.id)
-    expect(all[1].id).toBe(a.id)
-    expect(store.get(a.id)?.id).toBe(a.id)
+    // Use a fake clock so the two creates are guaranteed distinct timestamps;
+    // otherwise both may land in the same ms and the sort tie-breaks by
+    // insertion order, making the assertion order-dependent/flaky.
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      const a = store.create(input)
+      vi.setSystemTime(new Date('2026-01-01T00:00:01.000Z'))
+      const b = store.create({ ...input, vehicleId: 'v2' })
+      const all = store.listAll()
+      expect(all[0].id).toBe(b.id)
+      expect(all[1].id).toBe(a.id)
+      expect(store.get(a.id)?.id).toBe(a.id)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('acknowledges an instruction', () => {
