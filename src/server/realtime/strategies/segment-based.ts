@@ -1,9 +1,9 @@
-import { VehicleState } from '../../simulation/types.js';
-import { PredictionStrategy, StopPrediction, StopTimeEntry, StopLocation } from './types.js';
+import { VehicleState } from '../../simulation/types.js'
+import { PredictionStrategy, StopPrediction, StopTimeEntry, StopLocation } from './types.js'
 
-const DWELL_TIME_S = 20;  // seconds per intermediate stop
-const MIN_SPEED_MPS = 3;  // minimum speed to prevent division issues
-const DELAY_DECAY_PER_STOP = 0.85; // decay factor: delay diminishes per future stop
+const DWELL_TIME_S = 20 // seconds per intermediate stop
+const MIN_SPEED_MPS = 3 // minimum speed to prevent division issues
+const DELAY_DECAY_PER_STOP = 0.85 // decay factor: delay diminishes per future stop
 
 /**
  * Segment-based prediction strategy.
@@ -21,162 +21,166 @@ const DELAY_DECAY_PER_STOP = 0.85; // decay factor: delay diminishes per future 
  *   3. Dwell = 15s per intermediate stop
  */
 export class SegmentBasedStrategy implements PredictionStrategy {
-    readonly name = 'segment-based';
+  readonly name = 'segment-based'
 
-    predictUpcomingStops(
-        vehicle: VehicleState,
-        stopTimes: StopTimeEntry[],
-        _stopLocations: Map<string, StopLocation>,
-        startIndex: number,
-        nowEpoch: number,
-    ): StopPrediction[] {
-        const predictions: StopPrediction[] = [];
-        const { segmentSpeeds, segmentDistances, distanceTraveled } = vehicle;
-        const speedMultiplier = vehicle.congestionMultiplier ?? 1;
+  predictUpcomingStops(
+    vehicle: VehicleState,
+    stopTimes: StopTimeEntry[],
+    _stopLocations: Map<string, StopLocation>,
+    startIndex: number,
+    nowEpoch: number
+  ): StopPrediction[] {
+    const predictions: StopPrediction[] = []
+    const { segmentSpeeds, segmentDistances, distanceTraveled } = vehicle
+    const speedMultiplier = vehicle.congestionMultiplier ?? 1
 
-        // Fall back to simple speed-based if segment data isn't available
-        if (!segmentSpeeds?.length || !segmentDistances?.length || segmentDistances.length < stopTimes.length) {
-            return this.fallbackConstantSpeed(vehicle, stopTimes, startIndex, nowEpoch);
-        }
-
-        let cumulativeTime = 0; // seconds from now
-        let lastDepartureTime = 0;
-
-        for (let i = startIndex; i < stopTimes.length; i++) {
-            const st = stopTimes[i];
-
-            // Distance along route to this stop
-            const stopDist = segmentDistances[i] ?? segmentDistances[segmentDistances.length - 1];
-
-            // Remaining route distance from vehicle to this stop
-            const remainingDist = Math.max(0, stopDist - distanceTraveled);
-
-            // Walk through segments from current position to this stop,
-            // summing time at each segment's speed
-            cumulativeTime = this.computeTravelTime(
-                distanceTraveled,
-                stopDist,
-                segmentSpeeds,
-                segmentDistances,
-                speedMultiplier,
-            );
-
-            // Add dwell time for each intermediate stop between startIndex and i
-            const intermediateStops = i - startIndex;
-            const dwellTotal = intermediateStops * DWELL_TIME_S;
-
-            // Propagate measured delay with exponential decay
-            const stopsFromCurrent = i - startIndex;
-            const delayBias = vehicle.delaySeconds * Math.pow(DELAY_DECAY_PER_STOP, stopsFromCurrent);
-
-            let estimatedArrival = nowEpoch + Math.round(cumulativeTime + dwellTotal + delayBias);
-            const DEPARTURE_OFFSET = 20;
-
-            // Enforce strictly monotonic: arrival must be >= previous departure + 1s
-            const minArrival = lastDepartureTime + 1;
-            if (estimatedArrival < minArrival) {
-                estimatedArrival = minArrival;
-            }
-
-            const estimatedDeparture = estimatedArrival + DEPARTURE_OFFSET;
-
-            predictions.push({
-                stopId: st.stop_id,
-                stopSequence: st.stop_sequence,
-                arrivalTime: estimatedArrival,
-                departureTime: estimatedDeparture,
-                isRealtime: true,
-            });
-
-            lastDepartureTime = estimatedDeparture;
-        }
-
-        return predictions;
+    // Fall back to simple speed-based if segment data isn't available
+    if (
+      !segmentSpeeds?.length ||
+      !segmentDistances?.length ||
+      segmentDistances.length < stopTimes.length
+    ) {
+      return this.fallbackConstantSpeed(vehicle, stopTimes, startIndex, nowEpoch)
     }
 
-    /**
-     * Walk through segment speeds to compute total travel time from currentDist to targetDist.
-     */
-    private computeTravelTime(
-        currentDist: number,
-        targetDist: number,
-        segmentSpeeds: number[],
-        segmentDistances: number[],
-        speedMultiplier = 1,
-    ): number {
-        if (targetDist <= currentDist) return 0;
+    let cumulativeTime = 0 // seconds from now
+    let lastDepartureTime = 0
 
-        let totalTime = 0;
-        let pos = currentDist;
+    for (let i = startIndex; i < stopTimes.length; i++) {
+      const st = stopTimes[i]
 
-        for (let seg = 0; seg < segmentSpeeds.length; seg++) {
-            const segStart = segmentDistances[seg] ?? 0;
-            const segEnd = segmentDistances[seg + 1] ?? Infinity;
-            const speed = Math.max(segmentSpeeds[seg], MIN_SPEED_MPS) * speedMultiplier;
+      // Distance along route to this stop
+      const stopDist = segmentDistances[i] ?? segmentDistances[segmentDistances.length - 1]
 
-            // Skip segments we've already passed
-            if (pos >= segEnd) continue;
+      // Remaining route distance from vehicle to this stop
+      const remainingDist = Math.max(0, stopDist - distanceTraveled)
 
-            // Stop if we've reached the target
-            if (pos >= targetDist) break;
+      // Walk through segments from current position to this stop,
+      // summing time at each segment's speed
+      cumulativeTime = this.computeTravelTime(
+        distanceTraveled,
+        stopDist,
+        segmentSpeeds,
+        segmentDistances,
+        speedMultiplier
+      )
 
-            // Portion of this segment we need to traverse
-            const entryPoint = Math.max(pos, segStart);
-            const exitPoint = Math.min(targetDist, segEnd);
-            const distance = exitPoint - entryPoint;
+      // Add dwell time for each intermediate stop between startIndex and i
+      const intermediateStops = i - startIndex
+      const dwellTotal = intermediateStops * DWELL_TIME_S
 
-            if (distance > 0) {
-                totalTime += distance / speed;
-                pos = exitPoint;
-            }
-        }
+      // Propagate measured delay with exponential decay
+      const stopsFromCurrent = i - startIndex
+      const delayBias = vehicle.delaySeconds * Math.pow(DELAY_DECAY_PER_STOP, stopsFromCurrent)
 
-        return totalTime;
+      let estimatedArrival = nowEpoch + Math.round(cumulativeTime + dwellTotal + delayBias)
+      const DEPARTURE_OFFSET = 20
+
+      // Enforce strictly monotonic: arrival must be >= previous departure + 1s
+      const minArrival = lastDepartureTime + 1
+      if (estimatedArrival < minArrival) {
+        estimatedArrival = minArrival
+      }
+
+      const estimatedDeparture = estimatedArrival + DEPARTURE_OFFSET
+
+      predictions.push({
+        stopId: st.stop_id,
+        stopSequence: st.stop_sequence,
+        arrivalTime: estimatedArrival,
+        departureTime: estimatedDeparture,
+        isRealtime: true,
+      })
+
+      lastDepartureTime = estimatedDeparture
     }
 
-    /**
-     * Fallback for vehicles without segment data — constant speed estimate.
-     */
-    private fallbackConstantSpeed(
-        vehicle: VehicleState,
-        stopTimes: StopTimeEntry[],
-        startIndex: number,
-        nowEpoch: number,
-    ): StopPrediction[] {
-        const predictions: StopPrediction[] = [];
-        const speed = Math.max(vehicle.speed, MIN_SPEED_MPS);
-        const remainingDist = vehicle.totalDistance - vehicle.distanceTraveled;
-        const remainingStops = stopTimes.length - startIndex;
-        const distPerStop = remainingStops > 0 ? remainingDist / remainingStops : 0;
+    return predictions
+  }
 
-        let lastDepartureTime = 0;
+  /**
+   * Walk through segment speeds to compute total travel time from currentDist to targetDist.
+   */
+  private computeTravelTime(
+    currentDist: number,
+    targetDist: number,
+    segmentSpeeds: number[],
+    segmentDistances: number[],
+    speedMultiplier = 1
+  ): number {
+    if (targetDist <= currentDist) return 0
 
-        for (let i = startIndex; i < stopTimes.length; i++) {
-            const stopsAhead = i - startIndex + 1;
-            const dist = distPerStop * stopsAhead;
-            const travelTime = dist / speed;
-            const dwellTime = (i - startIndex) * DWELL_TIME_S;
+    let totalTime = 0
+    let pos = currentDist
 
-            let estimatedArrival = nowEpoch + Math.round(travelTime + dwellTime);
-            const DEPARTURE_OFFSET = 20;
+    for (let seg = 0; seg < segmentSpeeds.length; seg++) {
+      const segStart = segmentDistances[seg] ?? 0
+      const segEnd = segmentDistances[seg + 1] ?? Infinity
+      const speed = Math.max(segmentSpeeds[seg], MIN_SPEED_MPS) * speedMultiplier
 
-            const minArrival = lastDepartureTime + 1;
-            if (estimatedArrival < minArrival) {
-                estimatedArrival = minArrival;
-            }
+      // Skip segments we've already passed
+      if (pos >= segEnd) continue
 
-            const estimatedDeparture = estimatedArrival + DEPARTURE_OFFSET;
+      // Stop if we've reached the target
+      if (pos >= targetDist) break
 
-            predictions.push({
-                stopId: stopTimes[i].stop_id,
-                stopSequence: stopTimes[i].stop_sequence,
-                arrivalTime: estimatedArrival,
-                departureTime: estimatedDeparture,
-                isRealtime: true,
-            });
-            lastDepartureTime = estimatedDeparture;
-        }
+      // Portion of this segment we need to traverse
+      const entryPoint = Math.max(pos, segStart)
+      const exitPoint = Math.min(targetDist, segEnd)
+      const distance = exitPoint - entryPoint
 
-        return predictions;
+      if (distance > 0) {
+        totalTime += distance / speed
+        pos = exitPoint
+      }
     }
+
+    return totalTime
+  }
+
+  /**
+   * Fallback for vehicles without segment data — constant speed estimate.
+   */
+  private fallbackConstantSpeed(
+    vehicle: VehicleState,
+    stopTimes: StopTimeEntry[],
+    startIndex: number,
+    nowEpoch: number
+  ): StopPrediction[] {
+    const predictions: StopPrediction[] = []
+    const speed = Math.max(vehicle.speed, MIN_SPEED_MPS)
+    const remainingDist = vehicle.totalDistance - vehicle.distanceTraveled
+    const remainingStops = stopTimes.length - startIndex
+    const distPerStop = remainingStops > 0 ? remainingDist / remainingStops : 0
+
+    let lastDepartureTime = 0
+
+    for (let i = startIndex; i < stopTimes.length; i++) {
+      const stopsAhead = i - startIndex + 1
+      const dist = distPerStop * stopsAhead
+      const travelTime = dist / speed
+      const dwellTime = (i - startIndex) * DWELL_TIME_S
+
+      let estimatedArrival = nowEpoch + Math.round(travelTime + dwellTime)
+      const DEPARTURE_OFFSET = 20
+
+      const minArrival = lastDepartureTime + 1
+      if (estimatedArrival < minArrival) {
+        estimatedArrival = minArrival
+      }
+
+      const estimatedDeparture = estimatedArrival + DEPARTURE_OFFSET
+
+      predictions.push({
+        stopId: stopTimes[i].stop_id,
+        stopSequence: stopTimes[i].stop_sequence,
+        arrivalTime: estimatedArrival,
+        departureTime: estimatedDeparture,
+        isRealtime: true,
+      })
+      lastDepartureTime = estimatedDeparture
+    }
+
+    return predictions
+  }
 }

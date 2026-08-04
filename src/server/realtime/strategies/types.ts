@@ -1,4 +1,4 @@
-import { VehicleState } from '../../simulation/types.js';
+import { VehicleState } from '../../simulation/types.js'
 
 /**
  * Prediction strategy interface.
@@ -15,45 +15,45 @@ import { VehicleState } from '../../simulation/types.js';
  */
 
 export interface StopPrediction {
-    stopId: string;
-    stopSequence: number;
-    arrivalTime: number;     // epoch seconds
-    departureTime: number;   // epoch seconds
-    isRealtime: boolean;
+  stopId: string
+  stopSequence: number
+  arrivalTime: number // epoch seconds
+  departureTime: number // epoch seconds
+  isRealtime: boolean
 }
 
 export interface StopTimeEntry {
-    stop_id: string;
-    stop_sequence: number;
-    arrival_time: number;    // seconds since midnight
-    departure_time: number;  // seconds since midnight
+  stop_id: string
+  stop_sequence: number
+  arrival_time: number // seconds since midnight
+  departure_time: number // seconds since midnight
 }
 
 export interface StopLocation {
-    stop_id: string;
-    stop_lat: number;
-    stop_lon: number;
+  stop_id: string
+  stop_lat: number
+  stop_lon: number
 }
 
 export interface PredictionStrategy {
-    /** Human-readable name for logging/diagnostics */
-    readonly name: string;
+  /** Human-readable name for logging/diagnostics */
+  readonly name: string
 
-    /**
-     * Predict arrival/departure times for upcoming stops.
-     *
-     * @param vehicle      Current vehicle state (position, speed, segment data)
-     * @param stopTimes    Full ordered stop_times for the trip
-     * @param stopLocations Map of stop_id → {lat, lon} for all stops in the trip
-     * @param startIndex   Index of the first stop to predict (stops before this are already passed)
-     * @param nowEpoch     Current time as epoch seconds
-     * @returns            Array of predictions for stops from startIndex onward
-     */
-    predictUpcomingStops(
-        vehicle: VehicleState,
-        stopTimes: StopTimeEntry[],
-        stopLocations: Map<string, StopLocation>,
-        startIndex: number,
-        nowEpoch: number,
-    ): StopPrediction[];
+  /**
+   * Predict arrival/departure times for upcoming stops.
+   *
+   * @param vehicle      Current vehicle state (position, speed, segment data)
+   * @param stopTimes    Full ordered stop_times for the trip
+   * @param stopLocations Map of stop_id → {lat, lon} for all stops in the trip
+   * @param startIndex   Index of the first stop to predict (stops before this are already passed)
+   * @param nowEpoch     Current time as epoch seconds
+   * @returns            Array of predictions for stops from startIndex onward
+   */
+  predictUpcomingStops(
+    vehicle: VehicleState,
+    stopTimes: StopTimeEntry[],
+    stopLocations: Map<string, StopLocation>,
+    startIndex: number,
+    nowEpoch: number
+  ): StopPrediction[]
 }
