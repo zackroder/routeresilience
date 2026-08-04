@@ -14,8 +14,8 @@ source for unit tests.
 | File / dir                    | Source                                                              | Notes                                    |
 | ----------------------------- | ------------------------------------------------------------------- | ---------------------------------------- |
 | `gtfs-sample.zip`             | [Google GTFS sample-feed-1](https://github.com/google/transit/blob/master/gtfs/spec/en/examples/sample-feed-1.zip) | Small conformance fixture; `shapes.txt` is header-only. |
-| `gtfs-sample-v2/` (planned)   | Second dataset — TBD                                                | For shape-less / frequency-only coverage.|
-| `gtfs-sample-v3/` (planned)   | Third dataset — TBD                                                 | For route-branch / headway-topology edge cases. |
+| `gtfs-minimal/`               | Authored synthetic fixture                                          | Primary deterministic fixture with populated shapes and branches. Load via `loadMinimalFixture()`. |
+| Curated real-feed subset (planned) | Generated from a pinned CTA feed                              | Secondary robustness fixture, not for ordinary unit tests. |
 
 ## Adding a New Feed
 
@@ -23,7 +23,8 @@ source for unit tests.
 2. Place it under `src/test/fixtures/`.
 3. Register it in `src/test/helpers/fixtures.ts` by adding an entry to the
    `FEEDS` map with a stable key and the path/source.
-4. Reference it from a test via the `withFeed()` / `importFeed()` helpers.
+4. Reference it from a test via `loadMinimalFixture()` (for the hand-authored
+   fixture) or the CTA helpers (`loadCTATestDatabase()`).
 5. Update this table.
 
 ## Notes
@@ -33,6 +34,5 @@ source for unit tests.
   `shapes.txt`, `stop_times.txt`, `stops.txt`, `trips.txt`.
 - The Google sample's header-only `shapes.txt` is useful for missing-shape
   behavior, but it cannot exercise populated shape behavior.
-- Feeds without `shapes.txt` (e.g. frequency-based feeds) exercise different
-  code paths in `GTFSRepository`/`SimulationEngine` and should be added for
-  broader coverage.
+- A curated real-feed subset should preserve all related rows rather than
+  taking arbitrary CSV samples. See `TESTING.md` for the selection policy.
