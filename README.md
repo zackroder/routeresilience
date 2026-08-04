@@ -77,6 +77,34 @@ Future updates will include an automated engine that continuously scans the live
 4. **Access the Application**
    Open your browser and navigate to `http://localhost:5173`.
 
+## Testing
+
+Tests use the real **CTA GTFS feed** (the same feed loaded into `data/gtfs.db`). On first run, the test runner downloads/extracts the feed and builds a shared read-only test database at `data/test/gtfs.db` (this takes a few minutes). Subsequent runs reuse it.
+
+```bash
+npm run test          # Run tests in watch mode
+npm run test:run      # Run tests once
+npm run test:coverage # Run tests with a coverage report
+npm run lint          # ESLint check
+npm run lint:fix      # Auto-fix lint issues
+npm run format        # Prettier format
+npm run format:check  # Verify formatting (no changes)
+```
+
+To force a rebuild of the shared test database:
+
+```bash
+REBUILD_TEST_DB=1 npm run test:run
+```
+
+**Test structure** (`src/test/`):
+- `unit/` — Fast, isolated tests (GTFSRepository, DetourEngine, CancellationStore, DetourStore, InstructionStore, HeadwayService, SimulationEngine, RNG)
+- `integration/` — Express API route tests via supertest against the shared test DB
+- `helpers/` — Test utilities (in-memory/temp DB creation, CTA fixture loading)
+- `fixtures/` — Additional GTFS fixture placeholders
+
+A pre-commit hook runs lint-staged (Prettier + ESLint on staged `.ts` files). CI (`.github/workflows/test.yml`) runs formatting, lint, build, and tests with coverage.
+
 
 
 ## API Endpoints
