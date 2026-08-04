@@ -1,142 +1,125 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { GTFSRepository } from '../../server/gtfs/database.js'
 import { createInMemoryRepository } from '../../helpers/database.js'
-import { loadCTATestDatabase } from '../../helpers/fixtures.js'
+import { loadMinimalFixture } from '../../helpers/fixtures.js'
 
-// Queries against the shared CTA test DB (read-only, mirrors production).
-describe('GTFSRepository (CTA test DB)', () => {
+// Repository queries against the deterministic hand-authored fixture. No CTA
+// download, no reliance on the current date, and every result is asserted
+// exactly. The CTA feed is exercised only by the scale-smoke suites.
+describe('GTFSRepository (minimal fixture)', () => {
   let repo: GTFSRepository
 
   beforeAll(async () => {
-    repo = await loadCTATestDatabase()
+    repo = await loadMinimalFixture()
   })
 
   afterAll(() => {
     repo.close()
   })
 
-  it('reports non-zero counts for routes/stops/trips', () => {
-    expect(repo.getRouteCount()).toBeGreaterThan(0)
-    expect(repo.getStopCount()).toBeGreaterThan(0)
-    expect(repo.getTripCount()).toBeGreaterThan(0)
+  it('reports exact counts', () => {
+    expect(repo.getRouteCount()).toBe(2)
+    expect(repo.getStopCount()).toBe(6)
+    expect(repo.getTripCount()).toBe(5)
   })
 
   it('returns routes with the expected shape', () => {
     const routes = repo.getAllRoutes()
     expect(routes.length).toBe(repo.getRouteCount())
-    const first = routes[0]
-    expect(first.route_id).toBeDefined()
-    expect(typeof first.route_type).toBe('number')
+    for (const route of routes) {
+      expect(typeof route.route_type).toBe('number')
+      expect(route.route_short_name).toBeDefined()
+    }
   })
 
-  it('fetches a route by id', () => {
-    const first = repo.getAllRoutes()[0]
-    const route = repo.getRoute(first.route_id)
-    expect(route).toBeDefined()
-    expect(route?.route_id).toBe(first.route_id)
-  })
-
-  it('returns undefined for a missing route', () => {
+  it('fetches a route by id and returns undefined for a missing route', () => {
+    const route = repo.getRoute('route-trunk')
+    expect(route?.route_id).toBe('route-trunk')
     expect(repo.getRoute('__does_not_exist__')).toBeUndefined()
   })
 
-  it('returns stops and resolves them by id', () => {
-    const stops = repo.getAllStops()
-    expect(stops.length).toBe(repo.getStopCount())
-    const first = stops[0]
-    expect(repo.getStop(first.stop_id)?.stop_id).toBe(first.stop_id)
-  })
-
-  it('returns undefined for a missing stop', () => {
+  it('resolves stops by id and returns undefined for a missing stop', () => {
+    expect(repo.getStop('stop-a')?.stop_name).toBe('Stop A')
     expect(repo.getStop('__does_not_exist__')).toBeUndefined()
   })
 
   it('finds stops within a geographic bounding box', () => {
-    // Downtown Chicago bounds — should contain many stops.
-    const stops = repo.getStopsInBounds(41.8, -87.7, 42.0, -87.5)
-    expect(stops.length).toBeGreaterThan(0)
+    // Longitude window excludes the branch stop (stop-f sits at -87.631).
+    const stops = repo.getStopsInBounds(41.88, -87.6305, 41.884, -87.6295)
+    expect(stops.map((s) => s.stop_id).sort()).toEqual([
+      'stop-a',
+      'stop-b',
+      'stop-c',
+      'stop-d',
+      'stop-e',
+    ])
     for (const s of stops) {
-      expect(s.stop_lat).toBeGreaterThanOrEqual(41.8)
-      expect(s.stop_lat).toBeLessThanOrEqual(42.0)
+      expect(s.stop_lat).toBeGreaterThanOrEqual(41.88)
+      expect(s.stop_lat).toBeLessThanOrEqual(41.884)
     }
+    expect(repo.getStopsInBounds(0, 0, 1, 1)).toEqual([])
   })
 
   it('lists trips for a route and direction', () => {
-    const route = repo.getAllRoutes()[0]
-    const trips = repo.getTripsForRoute(route.route_id, 0)
-    expect(Array.isArray(trips)).toBe(true)
+    const trips = repo.getTripsForRoute('route-trunk', 0)
+    expect(trips.map((t) => t.trip_id).sort()).toEqual([
+      'trip-no-shape',
+      'trip-trunk-1',
+      'trip-trunk-2',
+      'trip-trunk-3',
+    ])
+    expect(repo.getTripsForRoute('route-trunk', 1)).toEqual([])
   })
 
-  it('returns stop times in stop_sequence order', () => {
-    const trip = repo.getTrip(repo.getAllRoutes()[0].route_id)
-      ? (() => {
-          const trips = repo.getTripsForRoute(repo.getAllRoutes()[0].route_id, 0)
-          return trips[0]
-        })()
-      : undefined
-    if (!trip) return
-    const stopTimes = repo.getStopTimes(trip.trip_id)
+  it('returns stop times in ascending stop_sequence order', () => {
+    const stopTimes = repo.getStopTimes('trip-trunk-1')
     expect(stopTimes.length).toBeGreaterThan(0)
     for (let i = 1; i < stopTimes.length; i++) {
       expect(stopTimes[i].stop_sequence).toBeGreaterThan(stopTimes[i - 1].stop_sequence)
     }
   })
 
-  it('resolves shapes for trips that carry a shape_id', () => {
-    const routes = repo.getAllRoutes()
-    for (const route of routes) {
-      const trips = repo.getTripsForRoute(route.route_id, 0)
-      const withShape = trips.find((t) => t.shape_id)
-      if (!withShape) continue
-      const shape = repo.getShape(withShape.shape_id)
-      expect(shape.length).toBeGreaterThan(0)
-      return // one positive assertion is enough
-    }
+  it('resolves a populated shape for a trip that carries a shape_id', () => {
+    const shape = repo.getShape(repo.getTrip('trip-trunk-1')!.shape_id)
+    expect(shape.length).toBeGreaterThan(0)
   })
 
-  it('getActiveTrips returns trips running on a service day', () => {
-    // Use the most recent Sunday from today so weekday-heavy calendars and
-    // exceptions are both exercised consistently.
-    const now = new Date()
-    const day = now.getDay() // 0 = Sunday
-    const lastSunday = new Date(now)
-    lastSunday.setDate(now.getDate() - day)
-    const dateStr = `${lastSunday.getFullYear()}${String(lastSunday.getMonth() + 1).padStart(2, '0')}${String(lastSunday.getDate()).padStart(2, '0')}`
-    const active = repo.getActiveTrips(dateStr, 12 * 3600)
-    expect(Array.isArray(active)).toBe(true)
+  it('getActiveTrips returns the known set on a service day', () => {
+    const active = repo.getActiveTrips('20260715', 12 * 3600)
+    expect(active.map((t) => t.trip_id).sort()).toEqual(['trip-branch-1', 'trip-trunk-3'])
   })
 
-  it('isServiceActiveToday is consistent with calendar', () => {
-    // A date in the distant past has no calendar coverage -> inactive.
+  it('isServiceActiveToday is consistent with calendar and exceptions', () => {
+    expect(repo.isServiceActiveToday('service-weekday', '20260715')).toBe(true)
+    expect(repo.isServiceActiveToday('service-weekday', '20260714')).toBe(false)
     expect(repo.isServiceActiveToday('__missing__', '19990101')).toBe(false)
   })
 
   it('getServiceWeekPatterns returns a map keyed by service_id', () => {
     const patterns = repo.getServiceWeekPatterns()
     expect(patterns).toBeInstanceOf(Map)
-    for (const [sid, p] of patterns) {
-      expect(typeof sid).toBe('string')
-      expect(typeof p.weekdayCount).toBe('number')
-      expect(typeof p.weekendCount).toBe('number')
-    }
+    expect(patterns.get('service-weekday')).toEqual({ weekdayCount: 5, weekendCount: 0 })
   })
 
-  it('streamBlocks yields active trips ordered by block', () => {
-    const now = new Date()
-    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-    let count = 0
+  it('streamBlocks yields active trips ordered by block and time', () => {
+    const ids: string[] = []
     let prevBlock = ''
-    for (const t of repo.streamBlocks(dateStr)) {
-      count++
+    for (const t of repo.streamBlocks('20260715')) {
+      ids.push(t.trip_id)
       expect(t.block_id).toBeDefined()
-      if (prevBlock !== t.block_id && count > 1) {
-        // blocks are grouped; each trip must carry stop names for joined stops
-        expect(t.start_stop_name).toBeDefined()
+      expect(t.start_stop_name).toBeDefined()
+      if (prevBlock === t.block_id && ids.length > 1) {
+        // within a block, trips are ordered by start_time
       }
       prevBlock = t.block_id
     }
-    // may be zero on a day with no service, but must not throw
-    expect(count).toBeGreaterThanOrEqual(0)
+    expect(ids).toEqual([
+      'trip-trunk-1',
+      'trip-trunk-2',
+      'trip-branch-1',
+      'trip-trunk-3',
+      'trip-no-shape',
+    ])
   })
 })
 

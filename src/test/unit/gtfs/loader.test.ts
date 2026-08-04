@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { GTFSRepository } from '../../server/gtfs/database.js'
 import { ensureCTAFeedExtracted } from '../../../server/gtfs/loader.js'
+import { loadMinimalFixture } from '../../helpers/fixtures.js'
 
 const REQUIRED_GTFS_FILES = [
   'routes.txt',
@@ -14,11 +15,58 @@ const REQUIRED_GTFS_FILES = [
   'calendar_dates.txt',
 ]
 
-// Verifies the full loader pipeline against the real CTA feed: download/extract
-// (cached), import into SQLite, and resulting DB integrity. The shared test DB
-// is built via the same production code path (extract CTA zip -> import CSVs ->
-// index), so this suite doubles as an end-to-end smoke test of that path.
-describe('GTFS loader pipeline (CTA feed)', () => {
+// Loader-pipeline assertions against the deterministic minimal fixture: import
+// via the production code path and verify the computed fields (trip bounds,
+// terminal stop ids, cross-midnight times, directions inference).
+describe('GTFS loader pipeline (minimal fixture)', () => {
+  let repo: GTFSRepository
+
+  beforeAll(async () => {
+    repo = await loadMinimalFixture()
+  })
+
+  afterAll(() => {
+    repo.close()
+  })
+
+  it('imports the expected counts', () => {
+    expect(repo.getRouteCount()).toBe(2)
+    expect(repo.getTripCount()).toBe(5)
+    expect(repo.getStopCount()).toBe(6)
+    // stop_times are the critical dependency — must be populated.
+    expect(repo.getStopTimes('trip-trunk-1').length).toBeGreaterThan(0)
+  })
+
+  it('computes trip start/end times and stop ids during import', () => {
+    const t = repo.getTrip('trip-trunk-1')!
+    expect(t.start_time).toBe(11 * 3600)
+    expect(t.end_time).toBe(11 * 3600 + 1200)
+    expect(t.start_stop_id).toBe('stop-a')
+    expect(t.end_stop_id).toBe('stop-e')
+    expect(t.end_time).toBeGreaterThan(t.start_time)
+  })
+
+  it('parses cross-midnight times during import', () => {
+    const t = repo.getTrip('trip-trunk-2')!
+    expect(t.start_time).toBe(23 * 3600 + 1800)
+    expect(t.end_time).toBe(24 * 3600 + 600)
+    expect(t.end_time).toBeGreaterThan(t.start_time)
+  })
+
+  it('leaves route directions empty when trips carry no direction names', () => {
+    expect(repo.getRoute('route-trunk')!.directions).toBeUndefined()
+    expect(repo.getRoute('route-branch')!.directions).toBeUndefined()
+  })
+
+  it('keeps only route_type 3 routes', () => {
+    expect(repo.getRouteCount()).toBe(2)
+  })
+})
+
+// The full CTA pipeline (download/extract/import) is a scale smoke test: it
+// validates real-world feed irregularity at production volume. It is
+// network-dependent and should not be the default data source for focused tests.
+describe('GTFS loader pipeline (CTA scale smoke)', () => {
   let repo: GTFSRepository
 
   beforeAll(async () => {
@@ -50,32 +98,23 @@ describe('GTFS loader pipeline (CTA feed)', () => {
     expect(repo.getRouteCount()).toBeGreaterThan(0)
     expect(repo.getStopCount()).toBeGreaterThan(0)
     expect(repo.getTripCount()).toBeGreaterThan(0)
-    // stop_times are the critical dependency — must be populated.
     const trips = repo.getTripsForRoute(repo.getAllRoutes()[0].route_id, 0)
-    if (trips.length > 0) {
-      expect(repo.getStopTimes(trips[0].trip_id).length).toBeGreaterThan(0)
-    }
+    expect(trips.length).toBeGreaterThan(0)
+    expect(repo.getStopTimes(trips[0].trip_id).length).toBeGreaterThan(0)
   })
 
   it('trip start/end times and stop ids are computed during import', () => {
-    const routes = repo.getAllRoutes()
-    for (const route of routes) {
-      const trips = repo.getTripsForRoute(route.route_id, 0)
-      const withBounds = trips.find(
-        (t) => t.start_time > 0 && t.end_time > 0 && t.start_stop_id && t.end_stop_id
-      )
-      if (withBounds) {
-        expect(withBounds.end_time).toBeGreaterThan(withBounds.start_time)
-        return
-      }
-    }
-    // Fall through is acceptable only if no trip has computed bounds.
+    const trips = repo.getTripsForRoute(repo.getAllRoutes()[0].route_id, 0)
+    const withBounds = trips.find(
+      (t) => t.start_time > 0 && t.end_time > 0 && t.start_stop_id && t.end_stop_id
+    )
+    expect(withBounds).toBeDefined()
+    expect(withBounds!.end_time).toBeGreaterThan(withBounds!.start_time)
   })
 
   it('route directions JSON is inferred during import', () => {
     const routes = repo.getAllRoutes()
     const withDirections = routes.find((r) => r.directions && Object.keys(r.directions).length > 0)
-    // At least one route should have inferred direction names.
     expect(withDirections).toBeDefined()
   })
 })
