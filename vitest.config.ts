@@ -6,7 +6,6 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/test/**/*.test.ts'],
-    globalSetup: ['src/test/global-setup.ts'],
     // GTFS loading from sample feeds can be slow on first run
     testTimeout: 30000,
     hookTimeout: 60000,
