@@ -3,37 +3,27 @@ import { DetourEngine } from '../../../server/detour/engine.js'
 import { DetourStore } from '../../../server/detour/store.js'
 import type { CreateDetourRequest } from '../../../server/detour/types.js'
 import { GTFSRepository } from '../../../server/gtfs/database.js'
-import { loadCTATestDatabase } from '../../helpers/fixtures.js'
+import { loadMinimalFixture } from '../../helpers/fixtures.js'
 import { createTempDir } from '../../helpers/database.js'
 
-// DetourEngine tests run against the shared read-only CTA test DB and an
+// DetourEngine tests run against the deterministic minimal fixture and an
 // isolated DetourStore (temp PERSISTENT_DATA_DIR) so nothing leaks to dev data.
-describe('DetourEngine', () => {
+describe('DetourEngine (minimal fixture)', () => {
   let repo: GTFSRepository
   let tmp: { dir: string; cleanup: () => void }
   let store: DetourStore
   let engine: DetourEngine
-  let routeId: string
-  let directionId: number
-  let startStopId: string
-  let endStopId: string
+
+  const routeId = 'route-trunk'
+  const directionId = 0
+  // Corridor stop-a -> stop-e on the trunk; stop-b/c/d sit between them.
+  const startStopId = 'stop-a'
+  const endStopId = 'stop-e'
+  const activeDate = '20260715' // Wednesday, regular service.
+  const now = new Date(2026, 6, 15, 12, 0, 0)
 
   beforeAll(async () => {
-    repo = await loadCTATestDatabase()
-    const routes = repo.getAllRoutes()
-    expect(routes.length).toBeGreaterThan(0)
-    routeId = routes[0].route_id
-
-    // Pick a trip with at least 3 stops to serve as a detour corridor.
-    for (const trip of repo.getTripsForRoute(routeId, 0)) {
-      const st = repo.getStopTimes(trip.trip_id)
-      if (st.length >= 3) {
-        directionId = trip.direction_id
-        startStopId = st[0].stop_id
-        endStopId = st[st.length - 1].stop_id
-        break
-      }
-    }
+    repo = await loadMinimalFixture()
   })
 
   afterAll(() => {
@@ -53,7 +43,6 @@ describe('DetourEngine', () => {
   })
 
   function makeRequest(overrides: Partial<CreateDetourRequest> = {}): CreateDetourRequest {
-    const now = Date.now()
     return {
       routeId,
       directionId,
@@ -62,10 +51,11 @@ describe('DetourEngine', () => {
       replacementStops: [],
       detourShape: [
         [41.88, -87.63],
-        [41.89, -87.63],
+        [41.882, -87.63],
+        [41.884, -87.63],
       ],
-      startTime: new Date(now - 3600_000).toISOString(),
-      endTime: new Date(now + 3600_000).toISOString(),
+      startTime: new Date(now.getTime() - 3600_000).toISOString(),
+      endTime: new Date(now.getTime() + 3600_000).toISOString(),
       description: 'Test detour',
       ...overrides,
     }
@@ -85,36 +75,54 @@ describe('DetourEngine', () => {
     expect(store.getAll()).toHaveLength(0)
   })
 
-  it('computes a path (diverge -> detour -> rejoin) on create', () => {
+  it('computes a stitched path (diverge -> detour -> rejoin)', () => {
     const detour = engine.createDetour(makeRequest())
     expect(detour.path).toBeDefined()
-    expect(detour.path!.length).toBeGreaterThanOrEqual(2)
-    // First path point should match the diverge region (or the detour shape
-    // if no original shape matched).
-    expect(detour.path![0]).toBeDefined()
+    expect(detour.path!.length).toBeGreaterThanOrEqual(3)
+    // Starts at the diverge stop and ends at the rejoin stop.
+    expect(detour.path![0][0]).toBeCloseTo(41.88)
+    expect(detour.path![detour.path!.length - 1][0]).toBeCloseTo(41.884)
   })
 
-  it('getAffectedTripIds returns trips on the route/direction serving the corridor', () => {
+  it('identifies affected trips on the corridor', () => {
     const detour = engine.createDetour(makeRequest())
-    const now = new Date()
-    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-    const affected = engine.getAffectedTripIds(detour, dateStr)
-    expect(Array.isArray(affected)).toBe(true)
+    const affected = engine.getAffectedTripIds(detour, activeDate).sort()
+    expect(affected).toEqual(['trip-trunk-1', 'trip-trunk-2', 'trip-trunk-3'])
   })
 
-  it('computeModifiedTrip builds a modified stop sequence', () => {
+  it('returns no affected trips on a removed service day', () => {
     const detour = engine.createDetour(makeRequest())
-    // Find a trip that actually traverses the corridor.
-    const trips = repo.getTripsForRoute(routeId, directionId)
-    let modified = null
-    for (const t of trips) {
-      modified = engine.computeModifiedTrip(t.trip_id, detour)
-      if (modified) break
+    expect(engine.getAffectedTripIds(detour, '20260714')).toEqual([])
+  })
+
+  it('computeModifiedTrip skips the corridor stops and preserves order', () => {
+    const detour = engine.createDetour(
+      makeRequest({
+        replacementStops: [
+          {
+            stopId: 'stop-x',
+            stopName: 'Detour X',
+            lat: 41.882,
+            lon: -87.631,
+            travelTimeFromPrevious: 600,
+          },
+        ],
+      })
+    )
+    const modified = engine.computeModifiedTrip('trip-trunk-1', detour)
+    expect(modified).not.toBeNull()
+    expect(modified!.tripId).toBe('trip-trunk-1')
+    expect(modified!.detourId).toBe(detour.id)
+    expect(modified!.skippedStops.map((s) => s.stopId)).toEqual(['stop-b', 'stop-c', 'stop-d'])
+    const stopIds = modified!.modifiedStopTimes.map((s) => s.stopId)
+    expect(stopIds).toEqual(['stop-a', 'stop-x', 'stop-e'])
+    const replacement = modified!.modifiedStopTimes.find((s) => s.isReplacement)
+    expect(replacement?.stopId).toBe('stop-x')
+    // Times remain ordered across the detour.
+    const arrivals = modified!.modifiedStopTimes.map((s) => s.arrivalTime)
+    for (let i = 1; i < arrivals.length; i++) {
+      expect(arrivals[i]).toBeGreaterThan(arrivals[i - 1])
     }
-    if (!modified) return // no trip serves the corridor on any service day
-    expect(modified.tripId).toBeDefined()
-    expect(modified.modifiedStopTimes.length).toBeGreaterThan(0)
-    expect(modified.detourId).toBe(detour.id)
   })
 
   it('computeModifiedTrip returns null for an unknown trip', () => {
@@ -122,43 +130,34 @@ describe('DetourEngine', () => {
     expect(engine.computeModifiedTrip('__missing__', detour)).toBeNull()
   })
 
-  it('marks skipped stops between diverge and rejoin', () => {
-    // Corridor with 3+ stops, skip the middle one.
-    const detour = engine.createDetour(
-      makeRequest({
-        replacementStops: [
-          {
-            stopId: endStopId,
-            stopName: 'Rejoin',
-            lat: 41.89,
-            lon: -87.63,
-            travelTimeFromPrevious: 120,
-          },
-        ],
-      })
-    )
-    const trips = repo.getTripsForRoute(routeId, directionId)
-    for (const t of trips) {
-      const modified = engine.computeModifiedTrip(t.trip_id, detour)
-      if (!modified) continue
-      // The replaced corridor should have at least one skipped original stop
-      // or at least one replacement stop in the sequence.
-      expect(
-        modified.skippedStops.length +
-          modified.modifiedStopTimes.filter((s) => s.isReplacement).length
-      ).toBeGreaterThan(0)
-      break
-    }
+  it('computeModifiedTrip marks zero skipped stops for an adjacent corridor', () => {
+    // Corridor stop-a -> stop-b: no stops lie between, so nothing is skipped
+    // and every original stop is preserved (rejoin shifts later times).
+    const detour = engine.createDetour(makeRequest({ startStopId: 'stop-a', endStopId: 'stop-b' }))
+    const modified = engine.computeModifiedTrip('trip-trunk-1', detour)
+    expect(modified).not.toBeNull()
+    expect(modified!.skippedStops).toEqual([])
+    expect(modified!.modifiedStopTimes.map((s) => s.stopId)).toEqual([
+      'stop-a',
+      'stop-b',
+      'stop-c',
+      'stop-d',
+      'stop-e',
+    ])
   })
 
   it('getAllModifiedTrips returns a map keyed by trip id', () => {
     engine.createDetour(makeRequest())
-    const map = engine.getAllModifiedTrips(new Date())
+    const map = engine.getAllModifiedTrips(now)
     expect(map).toBeInstanceOf(Map)
+    expect(map.size).toBeGreaterThan(0)
+    for (const [tripId, modified] of map) {
+      expect(modified.tripId).toBe(tripId)
+    }
   })
 
   it('getAllModifiedTrips is empty when no active detours', () => {
-    const map = engine.getAllModifiedTrips(new Date())
+    const map = engine.getAllModifiedTrips(now)
     expect(map.size).toBe(0)
   })
 })

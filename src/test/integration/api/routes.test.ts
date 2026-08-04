@@ -8,11 +8,11 @@ import { DetourStore } from '../../../server/detour/store.js'
 import { CancellationStore } from '../../../server/detour/cancellations.js'
 import { InstructionStore } from '../../../server/instructions/store.js'
 import type { OperatorInstruction } from '../../../server/instructions/types.js'
-import { loadCTATestDatabase } from '../../helpers/fixtures.js'
+import { loadMinimalFixture } from '../../helpers/fixtures.js'
 import { createTempDir } from '../../helpers/database.js'
 
-// Integration tests exercise the Express router against the shared read-only
-// CTA test DB with real stores (isolated temp dirs). Heavy/dynamic services
+// Integration tests exercise the Express router against the deterministic
+// minimal fixture with real stores (isolated temp dirs). Heavy/dynamic services
 // (simulation, feed generator, headway) are stubbed with lightweight doubles
 // so the tests stay fast and deterministic.
 describe('API routes', () => {
@@ -24,10 +24,10 @@ describe('API routes', () => {
   let detourEngine: DetourEngine
   let app: express.Express
 
-  const routeId = '1' // CTA route 1 (Indiana/Hyde Park)
+  const routeId = 'route-trunk'
 
   beforeAll(async () => {
-    repo = await loadCTATestDatabase()
+    repo = await loadMinimalFixture()
     tmp = createTempDir()
     process.env.PERSISTENT_DATA_DIR = tmp.dir
     detourStore = new DetourStore()
@@ -64,7 +64,7 @@ describe('API routes', () => {
 
   const headwayStub = {
     getHeadways: () => ({
-      route: { routeId, routeShortName: '1', routeLongName: '', routeColor: '' },
+      route: { routeId, routeShortName: 'T', routeLongName: '', routeColor: '' },
       directionId: 0,
       timestamp: Date.now(),
       date: '20260715',
@@ -199,8 +199,8 @@ describe('API routes', () => {
       .send({
         routeId,
         directionId: 0,
-        startStopId: null,
-        endStopId: null,
+        startStopId: 'stop-a',
+        endStopId: 'stop-e',
         replacementStops: [],
         detourShape: [
           [41.88, -87.63],

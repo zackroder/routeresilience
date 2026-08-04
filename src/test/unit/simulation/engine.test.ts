@@ -3,12 +3,13 @@ import { SimulationEngine } from '../../../server/simulation/engine.js'
 import { DetourEngine } from '../../../server/detour/engine.js'
 import { DetourStore } from '../../../server/detour/store.js'
 import { GTFSRepository } from '../../../server/gtfs/database.js'
-import { loadCTATestDatabase } from '../../helpers/fixtures.js'
+import { loadMinimalFixture } from '../../helpers/fixtures.js'
 import { createTempDir } from '../../helpers/database.js'
 
 // SimulationEngine tests use manual mode (deterministic clock via advance())
-// and a seeded RNG with speed noise disabled, so runs are reproducible.
-describe('SimulationEngine', () => {
+// and a seeded RNG with speed noise disabled, so runs are reproducible against
+// the minimal fixture's fixed service set.
+describe('SimulationEngine (minimal fixture)', () => {
   let repo: GTFSRepository
   let tmp: { dir: string; cleanup: () => void }
   let store: DetourStore
@@ -17,12 +18,12 @@ describe('SimulationEngine', () => {
   let now: Date
 
   beforeAll(async () => {
-    repo = await loadCTATestDatabase()
+    repo = await loadMinimalFixture()
     tmp = createTempDir()
     process.env.PERSISTENT_DATA_DIR = tmp.dir
     store = new DetourStore()
     engine = new DetourEngine(repo, store)
-    // Wednesday 2026-07-15 noon — plenty of active service.
+    // Wednesday 2026-07-15 noon — two shaped trips run through midday.
     now = new Date(2026, 6, 15, 12, 0, 0)
     sim = new SimulationEngine(repo, engine, store, {
       manual: true,
@@ -47,10 +48,11 @@ describe('SimulationEngine', () => {
     sim.stop()
   })
 
-  it('spawns vehicles for active trips', () => {
-    expect(sim.getVehicleCount()).toBeGreaterThan(0)
-    const vehicles = sim.getVehicles()
-    for (const v of vehicles) {
+  it('spawns vehicles for the known active trips', () => {
+    expect(sim.getVehicleCount()).toBe(2)
+    const tripIds = new Set(sim.getVehicles().map((v) => v.tripId))
+    expect(tripIds).toEqual(new Set(['trip-trunk-3', 'trip-branch-1']))
+    for (const v of sim.getVehicles()) {
       expect(v.status).toBe('IN_TRANSIT')
       expect(v.tripId).toBeTruthy()
       expect(v.routeId).toBeTruthy()
@@ -77,7 +79,6 @@ describe('SimulationEngine', () => {
       const s = startPositions.get(v.vehicleId)
       return s && (v.distanceTraveled > s.dist || v.lat !== s.lat || v.lon !== s.lon)
     })
-    // Most active vehicles should have advanced at least a little.
     expect(moved.length).toBeGreaterThan(0)
   })
 
@@ -98,7 +99,6 @@ describe('SimulationEngine', () => {
     b.advance(10)
     const va = new Map(a.getVehicles().map((v) => [v.tripId, v]))
     const vb = new Map(b.getVehicles().map((v) => [v.tripId, v]))
-    // Same vehicle set after advance, and identical positions.
     expect(va.size).toBe(vb.size)
     for (const [tripId, av] of va) {
       const bv = vb.get(tripId)
@@ -162,8 +162,7 @@ describe('SimulationEngine', () => {
     sim.advance(120)
     const arrivals = sim.getArrivals()
     expect(Array.isArray(arrivals)).toBe(true)
-    // With 787 vehicles moving for 2 minutes, at least one stop arrival
-    // should have been recorded.
+    // Two vehicles moving for 2 minutes reach their first downstream stops.
     expect(arrivals.length).toBeGreaterThan(0)
   })
 })

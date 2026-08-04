@@ -8,7 +8,7 @@ import type {
 import type { VehicleState } from '../../../server/simulation/types.js'
 import { GTFSRepository } from '../../../server/gtfs/database.js'
 import { haversineMeters } from '../../../server/gtfs/loader.js'
-import { loadCTATestDatabase } from '../../helpers/fixtures.js'
+import { loadMinimalFixture } from '../../helpers/fixtures.js'
 
 // A controllable VehicleDataSource used to inject vehicles into HeadwayService
 // without running the full simulation.
@@ -49,8 +49,12 @@ class MockVehicleSource implements VehicleDataSource {
   }
 }
 
-// Build a vehicle for a real CTA trip with segment data derived from the actual
-// schedule, so PredictionEngine's SegmentBasedStrategy can generate predictions.
+// Fixed service day used everywhere so results do not depend on the run date.
+const now = new Date(2026, 6, 15, 12, 0, 0)
+
+// Build a vehicle for a known fixture trip with segment data derived from the
+// actual schedule, so PredictionEngine's SegmentBasedStrategy can generate
+// predictions.
 function buildVehicleForTrip(
   repo: GTFSRepository,
   trip: { trip_id: string; route_id: string; direction_id: number },
@@ -85,8 +89,8 @@ function buildVehicleForTrip(
     routeId: trip.route_id,
     directionId: trip.direction_id,
     shapeId: '',
-    lat: 41.8,
-    lon: -87.6,
+    lat: 41.882,
+    lon: -87.63,
     bearing: 0,
     speed: segmentSpeeds[0] ?? 8.9,
     shapeIndex: 0,
@@ -101,7 +105,7 @@ function buildVehicleForTrip(
     })),
     status: 'IN_TRANSIT',
     tripStartTime: stopTimes[0]?.arrival_time ?? 0,
-    lastUpdateTime: opts.lastUpdateTime ?? Date.now(),
+    lastUpdateTime: opts.lastUpdateTime ?? now.getTime(),
     dwellEndTime: 0,
     scheduledEndTime: stopTimes[stopTimes.length - 1]?.arrival_time ?? 0,
     delaySeconds: opts.delaySeconds ?? 0,
@@ -111,20 +115,22 @@ function buildVehicleForTrip(
   }
 }
 
-describe('HeadwayService', () => {
+describe('HeadwayService (minimal fixture)', () => {
   let repo: GTFSRepository
   let routeId: string
   let trips: { trip_id: string; route_id: string; direction_id: number }[]
 
   beforeAll(async () => {
-    repo = await loadCTATestDatabase()
-    // Pick a route with plenty of trips so topology is non-trivial.
+    repo = await loadMinimalFixture()
+    // The trunk route has several trips with the same 5-stop pattern, which
+    // gives the widest-path topology a non-trivial trunk.
     const candidates = repo
       .getAllRoutes()
-      .filter((r) => repo.getTripsForRoute(r.route_id, 0).length >= 5)
+      .filter((r) => repo.getTripsForRoute(r.route_id, 0).length >= 2)
     const chosen = candidates[0] ?? repo.getAllRoutes()[0]
     routeId = chosen.route_id
     trips = repo.getTripsForRoute(routeId, 0).slice(0, 3)
+    expect(trips.length).toBeGreaterThanOrEqual(2)
   })
 
   afterAll(() => {
@@ -143,12 +149,12 @@ describe('HeadwayService', () => {
 
   it('throws for an unknown route', () => {
     const { service } = makeService([])
-    expect(() => service.getHeadways('__no_such_route__')).toThrow('Route not found')
+    expect(() => service.getHeadways('__no_such_route__', 0, now)).toThrow('Route not found')
   })
 
   it('returns a well-formed empty response when no vehicles are tracked', () => {
     const { service } = makeService([])
-    const res = service.getHeadways(routeId, 0)
+    const res = service.getHeadways(routeId, 0, now)
     expect(res.route.routeId).toBe(routeId)
     expect(res.vehicles).toEqual([])
     expect(res.controlPoints.length).toBeGreaterThan(0)
@@ -160,7 +166,7 @@ describe('HeadwayService', () => {
   it('reports vehicles with predictions when a vehicle is injected', () => {
     const vehicle = buildVehicleForTrip(repo, trips[0], 'v1', { currentStopIndex: 1 })
     const { service } = makeService([vehicle])
-    const res = service.getHeadways(routeId, 0)
+    const res = service.getHeadways(routeId, 0, now)
     expect(res.vehicles).toHaveLength(1)
     const v = res.vehicles[0]
     expect(v.vehicleId).toBe('v1')
@@ -178,7 +184,7 @@ describe('HeadwayService', () => {
       delaySeconds: 30,
     })
     const { service } = makeService([a, b])
-    const res = service.getHeadways(routeId, 0)
+    const res = service.getHeadways(routeId, 0, now)
     const ids = res.vehicles.map((v) => v.vehicleId)
     expect(ids).toContain('v-ahead')
     expect(ids).toContain('v-behind')
@@ -193,7 +199,7 @@ describe('HeadwayService', () => {
     const a = buildVehicleForTrip(repo, trips[0], 'v1')
     const b = buildVehicleForTrip(repo, trips[0], 'v2')
     const { service } = makeService([a, b])
-    const res = service.getHeadways(routeId, 0)
+    const res = service.getHeadways(routeId, 0, now)
     expect(res.vehicles.length).toBe(2)
     const bunched = res.vehicles.filter((v) => v.headwayStatus === 'BUNCHED')
     expect(bunched.length).toBeGreaterThan(0)
@@ -203,7 +209,7 @@ describe('HeadwayService', () => {
     const a = buildVehicleForTrip(repo, trips[0], 'v1')
     const b = buildVehicleForTrip(repo, trips[0], 'v2')
     const { service } = makeService([a, b])
-    const recs = service.getRecommendations(routeId, 0)
+    const recs = service.getRecommendations(routeId, 0, now)
     expect(recs.length).toBeGreaterThan(0)
     for (const r of recs) {
       expect(r.action).toBe('HOLD')
@@ -223,7 +229,7 @@ describe('HeadwayService', () => {
       delaySeconds: 0,
     })
     const { service } = makeService([a, b])
-    const recs = service.getRecommendations(routeId, 0)
+    const recs = service.getRecommendations(routeId, 0, now)
     expect(recs.length).toBe(0)
   })
 })
