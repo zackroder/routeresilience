@@ -1,9 +1,9 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
-import { Route, Trip, Stop, StopTime, ShapePoint, Calendar, CalendarDate } from './types.js';
+import Database from 'better-sqlite3'
+import path from 'path'
+import fs from 'fs'
+import { Route, Trip, Stop, StopTime, ShapePoint, Calendar, CalendarDate } from './types.js'
 
-const DB_PATH = path.resolve(process.cwd(), 'data', 'gtfs.db');
+const DB_PATH = path.resolve(process.cwd(), 'data', 'gtfs.db')
 
 // Schema definition
 const SCHEMA = `
@@ -94,126 +94,146 @@ const SCHEMA = `
         exception_type INTEGER,
         PRIMARY KEY (service_id, date)
     );
-`;
+`
+
+export interface GTFSRepositoryOptions {
+  clear?: boolean
+  readonly?: boolean
+  /** Override the default database file path (used by tests for isolation). */
+  dbPath?: string
+  /** Use an in-memory SQLite database instead of a file on disk. */
+  memory?: boolean
+}
 
 export class GTFSRepository {
-    private db: Database.Database;
-    private stopCache: Map<string, Stop> | null = null;
+  private db: Database.Database
+  private stopCache: Map<string, Stop> | null = null
 
-    constructor(options: { clear?: boolean, readonly?: boolean } = {}) {
-        const dataDir = path.dirname(DB_PATH);
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-
-        // Only delete if explicitly requested
-        if (options.clear && fs.existsSync(DB_PATH)) {
-            try {
-                fs.unlinkSync(DB_PATH);
-            } catch (e) {
-                console.warn('Could not delete existing DB, might be in use:', e);
-            }
-        }
-
-        this.db = new Database(DB_PATH, { readonly: options.readonly || false });
-        
-        if (!options.readonly) {
-            this.db.pragma('journal_mode = WAL');
-            this.db.exec(SCHEMA);
-        }
+  constructor(options: GTFSRepositoryOptions = {}) {
+    const dbPath = options.memory ? ':memory:' : options.dbPath || DB_PATH
+    const dataDir = path.dirname(dbPath)
+    if (!options.memory && !fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true })
     }
 
-    private initStopCache(): Map<string, Stop> {
-        if (!this.stopCache) {
-            const stops = this.getAllStops();
-            this.stopCache = new Map<string, Stop>();
-            for (const s of stops) {
-                this.stopCache.set(s.stop_id, s);
-            }
-        }
-        return this.stopCache;
+    // Only delete if explicitly requested
+    if (!options.memory && options.clear && fs.existsSync(dbPath)) {
+      try {
+        fs.unlinkSync(dbPath)
+      } catch (e) {
+        console.warn('Could not delete existing DB, might be in use:', e)
+      }
     }
 
-    // ─── Transaction Helper ───
-    transaction(fn: () => void): void {
-        const txn = this.db.transaction(fn);
-        txn();
+    this.db = new Database(dbPath, { readonly: options.readonly || false })
+
+    if (!options.readonly) {
+      this.db.pragma('journal_mode = WAL')
+      this.db.exec(SCHEMA)
     }
+  }
 
-    getDb(): Database.Database {
-        return this.db;
+  private initStopCache(): Map<string, Stop> {
+    if (!this.stopCache) {
+      const stops = this.getAllStops()
+      this.stopCache = new Map<string, Stop>()
+      for (const s of stops) {
+        this.stopCache.set(s.stop_id, s)
+      }
     }
+    return this.stopCache
+  }
 
-    // ─── Data Access Methods ───
+  // ─── Transaction Helper ───
+  transaction(fn: () => void): void {
+    const txn = this.db.transaction(fn)
+    txn()
+  }
 
-    getAllRoutes(): Route[] {
-        const rows = this.db.prepare('SELECT * FROM routes ORDER BY route_short_name').all() as any[];
-        return rows.map(r => ({
-            ...r,
-            directions: r.directions ? JSON.parse(r.directions) : undefined
-        }));
+  getDb(): Database.Database {
+    return this.db
+  }
+
+  // ─── Data Access Methods ───
+
+  getAllRoutes(): Route[] {
+    const rows = this.db.prepare('SELECT * FROM routes ORDER BY route_short_name').all() as any[]
+    return rows.map((r) => ({
+      ...r,
+      directions: r.directions ? JSON.parse(r.directions) : undefined,
+    }))
+  }
+
+  getRoute(routeId: string): Route | undefined {
+    const row = this.db.prepare('SELECT * FROM routes WHERE route_id = ?').get(routeId) as any
+    if (!row) return undefined
+    return {
+      ...row,
+      directions: row.directions ? JSON.parse(row.directions) : undefined,
     }
+  }
 
-    getRoute(routeId: string): Route | undefined {
-        const row = this.db.prepare('SELECT * FROM routes WHERE route_id = ?').get(routeId) as any;
-        if (!row) return undefined;
-        return {
-            ...row,
-            directions: row.directions ? JSON.parse(row.directions) : undefined
-        };
-    }
+  getAllStops(): Stop[] {
+    return this.db.prepare('SELECT * FROM stops').all() as Stop[]
+  }
 
-    getAllStops(): Stop[] {
-        return this.db.prepare('SELECT * FROM stops').all() as Stop[];
-    }
+  getAllStopsMap(): Map<string, Stop> {
+    return this.initStopCache()
+  }
 
-    getAllStopsMap(): Map<string, Stop> {
-        return this.initStopCache();
-    }
+  getStop(stopId: string): Stop | undefined {
+    return this.initStopCache().get(stopId)
+  }
 
-    getStop(stopId: string): Stop | undefined {
-        return this.initStopCache().get(stopId);
-    }
-
-    getStopsInBounds(minLat: number, minLon: number, maxLat: number, maxLon: number): Stop[] {
-        return this.db.prepare(`
+  getStopsInBounds(minLat: number, minLon: number, maxLat: number, maxLon: number): Stop[] {
+    return this.db
+      .prepare(
+        `
             SELECT * FROM stops 
             WHERE stop_lat BETWEEN ? AND ? 
             AND stop_lon BETWEEN ? AND ?
-        `).all(minLat, maxLat, minLon, maxLon) as Stop[];
-    }
+        `
+      )
+      .all(minLat, maxLat, minLon, maxLon) as Stop[]
+  }
 
-    getTripsForRoute(routeId: string, directionId: number): Trip[] {
-        return this.db.prepare('SELECT * FROM trips WHERE route_id = ? AND direction_id = ?').all(routeId, directionId) as Trip[];
-    }
+  getTripsForRoute(routeId: string, directionId: number): Trip[] {
+    return this.db
+      .prepare('SELECT * FROM trips WHERE route_id = ? AND direction_id = ?')
+      .all(routeId, directionId) as Trip[]
+  }
 
-    getTrip(tripId: string): Trip | undefined {
-        return this.db.prepare('SELECT * FROM trips WHERE trip_id = ?').get(tripId) as Trip | undefined;
-    }
+  getTrip(tripId: string): Trip | undefined {
+    return this.db.prepare('SELECT * FROM trips WHERE trip_id = ?').get(tripId) as Trip | undefined
+  }
 
-    getStopTimes(tripId: string): StopTime[] {
-        return this.db.prepare('SELECT * FROM stop_times WHERE trip_id = ? ORDER BY stop_sequence').all(tripId) as StopTime[];
-    }
+  getStopTimes(tripId: string): StopTime[] {
+    return this.db
+      .prepare('SELECT * FROM stop_times WHERE trip_id = ? ORDER BY stop_sequence')
+      .all(tripId) as StopTime[]
+  }
 
-    getShape(shapeId: string): ShapePoint[] {
-        return this.db.prepare('SELECT * FROM shapes WHERE shape_id = ? ORDER BY shape_pt_sequence').all(shapeId) as ShapePoint[];
-    }
+  getShape(shapeId: string): ShapePoint[] {
+    return this.db
+      .prepare('SELECT * FROM shapes WHERE shape_id = ? ORDER BY shape_pt_sequence')
+      .all(shapeId) as ShapePoint[]
+  }
 
-    // ─── Optimized Queries ───
+  // ─── Optimized Queries ───
 
-    /**
-     * Get trips that are active at a specific time (seconds from midnight) on a specific date.
-     * Replaces the O(N) loop in SimulationEngine.
-     */
-    getActiveTrips(dateStr: string, timeSeconds: number): Trip[] {
-        // 1. Find active services for the date
-        const dayOfWeek = this.getDayColumnName(dateStr);
+  /**
+   * Get trips that are active at a specific time (seconds from midnight) on a specific date.
+   * Replaces the O(N) loop in SimulationEngine.
+   */
+  getActiveTrips(dateStr: string, timeSeconds: number): Trip[] {
+    // 1. Find active services for the date
+    const dayOfWeek = this.getDayColumnName(dateStr)
 
-        // This query joins trips with calendar/calendar_dates and stop_times bounds
-        // to find exactly which trips are running right now.
-        // optimization: pre-filter services
+    // This query joins trips with calendar/calendar_dates and stop_times bounds
+    // to find exactly which trips are running right now.
+    // optimization: pre-filter services
 
-        const stmt = this.db.prepare(`
+    const stmt = this.db.prepare(`
             SELECT t.*
             FROM trips t
         JOIN(
@@ -227,74 +247,89 @@ export class GTFSRepository {
                 WHERE date = ? AND exception_type = 2
         ) active_services ON t.service_id = active_services.service_id
             WHERE t.start_time <= ? AND t.end_time >= ?
-            `);
+            `)
 
-        // We check if current time is within [start_time, end_time]
-        return stmt.all(dateStr, dateStr, dateStr, dateStr, timeSeconds, timeSeconds) as Trip[];
+    // We check if current time is within [start_time, end_time]
+    return stmt.all(dateStr, dateStr, dateStr, dateStr, timeSeconds, timeSeconds) as Trip[]
+  }
+
+  private getDayColumnName(dateStr: string): string {
+    const year = parseInt(dateStr.substring(0, 4))
+    const month = parseInt(dateStr.substring(4, 6)) - 1
+    const day = parseInt(dateStr.substring(6, 8))
+    const date = new Date(year, month, day)
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+    return days[date.getDay()]
+  }
+
+  /** Returns true if the given service_id runs on the given date (YYYYMMDD). */
+  isServiceActiveToday(serviceId: string, dateStr: string): boolean {
+    // 1. Check calendar_dates exceptions
+    const exception = this.db
+      .prepare('SELECT exception_type FROM calendar_dates WHERE service_id = ? AND date = ?')
+      .get(serviceId, dateStr) as { exception_type: number } | undefined
+    if (exception) return exception.exception_type === 1
+
+    // 2. Fall back to regular calendar
+    const cal = this.db.prepare('SELECT * FROM calendar WHERE service_id = ?').get(serviceId) as any
+    if (!cal) return false
+    if (dateStr < cal.start_date || dateStr > cal.end_date) return false
+    const col = this.getDayColumnName(dateStr)
+    return cal[col] === 1
+  }
+
+  /**
+   * Weekly service-frequency patterns from calendar.txt.
+   * Returns service_id -> active weekday (Mon-Fri) and weekend (Sat/Sun) day
+   * counts. Used to weight topology trip counts so weekday service dominates.
+   */
+  getServiceWeekPatterns(): Map<string, { weekdayCount: number; weekendCount: number }> {
+    const rows = this.db
+      .prepare(
+        'SELECT service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday FROM calendar'
+      )
+      .all() as {
+      service_id: string
+      monday: number
+      tuesday: number
+      wednesday: number
+      thursday: number
+      friday: number
+      saturday: number
+      sunday: number
+    }[]
+    const map = new Map<string, { weekdayCount: number; weekendCount: number }>()
+    for (const r of rows) {
+      map.set(r.service_id, {
+        weekdayCount: r.monday + r.tuesday + r.wednesday + r.thursday + r.friday,
+        weekendCount: r.saturday + r.sunday,
+      })
     }
+    return map
+  }
 
-    private getDayColumnName(dateStr: string): string {
-        const year = parseInt(dateStr.substring(0, 4));
-        const month = parseInt(dateStr.substring(4, 6)) - 1;
-        const day = parseInt(dateStr.substring(6, 8));
-        const date = new Date(year, month, day);
-        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        return days[date.getDay()];
-    }
+  /**
+   * Get all unique shape IDs for a route/direction
+   */
+  getRouteShapeIds(routeId: string, directionId: number): string[] {
+    const rows = this.db
+      .prepare('SELECT DISTINCT shape_id FROM trips WHERE route_id = ? AND direction_id = ?')
+      .all(routeId, directionId) as { shape_id: string }[]
+    return rows.map((r) => r.shape_id).filter((id) => id)
+  }
 
-    /** Returns true if the given service_id runs on the given date (YYYYMMDD). */
-    isServiceActiveToday(serviceId: string, dateStr: string): boolean {
-        // 1. Check calendar_dates exceptions
-        const exception = this.db.prepare(
-            'SELECT exception_type FROM calendar_dates WHERE service_id = ? AND date = ?'
-        ).get(serviceId, dateStr) as { exception_type: number } | undefined;
-        if (exception) return exception.exception_type === 1;
+  /**
+   * Stream all trips for a specific date, ordered by block_id.
+   * Returns an iterator that yields one trip at a time to prevent memory spikes.
+   */
+  streamBlocks(
+    dateStr: string
+  ): IterableIterator<Trip & { start_stop_name: string; end_stop_name: string }> {
+    const dayOfWeek = this.getDayColumnName(dateStr)
 
-        // 2. Fall back to regular calendar
-        const cal = this.db.prepare(
-            'SELECT * FROM calendar WHERE service_id = ?'
-        ).get(serviceId) as any;
-        if (!cal) return false;
-        if (dateStr < cal.start_date || dateStr > cal.end_date) return false;
-        const col = this.getDayColumnName(dateStr);
-        return cal[col] === 1;
-    }
-
-    /**
-     * Weekly service-frequency patterns from calendar.txt.
-     * Returns service_id -> active weekday (Mon-Fri) and weekend (Sat/Sun) day
-     * counts. Used to weight topology trip counts so weekday service dominates.
-     */
-    getServiceWeekPatterns(): Map<string, { weekdayCount: number; weekendCount: number }> {
-        const rows = this.db.prepare(
-            'SELECT service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday FROM calendar'
-        ).all() as { service_id: string; monday: number; tuesday: number; wednesday: number; thursday: number; friday: number; saturday: number; sunday: number }[];
-        const map = new Map<string, { weekdayCount: number; weekendCount: number }>();
-        for (const r of rows) {
-            map.set(r.service_id, {
-                weekdayCount: r.monday + r.tuesday + r.wednesday + r.thursday + r.friday,
-                weekendCount: r.saturday + r.sunday,
-            });
-        }
-        return map;
-    }
-
-    /**
-     * Get all unique shape IDs for a route/direction
-     */
-    getRouteShapeIds(routeId: string, directionId: number): string[] {
-        const rows = this.db.prepare('SELECT DISTINCT shape_id FROM trips WHERE route_id = ? AND direction_id = ?').all(routeId, directionId) as { shape_id: string }[];
-        return rows.map(r => r.shape_id).filter(id => id);
-    }
-
-    /**
-     * Stream all trips for a specific date, ordered by block_id.
-     * Returns an iterator that yields one trip at a time to prevent memory spikes.
-     */
-    streamBlocks(dateStr: string): IterableIterator<Trip & { start_stop_name: string; end_stop_name: string }> {
-        const dayOfWeek = this.getDayColumnName(dateStr);
-
-        return this.db.prepare(`
+    return this.db
+      .prepare(
+        `
             WITH active_trips AS (
                 SELECT t.*
                 FROM trips t
@@ -318,24 +353,28 @@ export class GTFSRepository {
             LEFT JOIN stops s_start ON at.start_stop_id = s_start.stop_id
             LEFT JOIN stops s_end ON at.end_stop_id = s_end.stop_id
             ORDER BY at.block_id, at.start_time
-        `).iterate(dateStr, dateStr, dateStr, dateStr) as IterableIterator<Trip & { start_stop_name: string; end_stop_name: string }>;
-    }
+        `
+      )
+      .iterate(dateStr, dateStr, dateStr, dateStr) as IterableIterator<
+      Trip & { start_stop_name: string; end_stop_name: string }
+    >
+  }
 
-    // ─── Counts ───
+  // ─── Counts ───
 
-    getRouteCount(): number {
-        return (this.db.prepare('SELECT count(*) as c FROM routes').get() as { c: number }).c;
-    }
+  getRouteCount(): number {
+    return (this.db.prepare('SELECT count(*) as c FROM routes').get() as { c: number }).c
+  }
 
-    getTripCount(): number {
-        return (this.db.prepare('SELECT count(*) as c FROM trips').get() as { c: number }).c;
-    }
+  getTripCount(): number {
+    return (this.db.prepare('SELECT count(*) as c FROM trips').get() as { c: number }).c
+  }
 
-    getStopCount(): number {
-        return (this.db.prepare('SELECT count(*) as c FROM stops').get() as { c: number }).c;
-    }
+  getStopCount(): number {
+    return (this.db.prepare('SELECT count(*) as c FROM stops').get() as { c: number }).c
+  }
 
-    close(): void {
-        this.db.close();
-    }
+  close(): void {
+    this.db.close()
+  }
 }
