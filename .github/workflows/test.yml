@@ -38,7 +38,7 @@ jobs:
       # NOTE: The first test run downloads and imports the CTA GTFS feed to
       # build the shared test DB (data/test/gtfs.db). This can take several
       # minutes and requires outbound access to transitchicago.com. See
-      # TESTING_INFRASTRUCTURE_HANDOFF.md for options if this proves flaky.
+      # TESTING.md for the fixture and scale-test policy.
       - name: Run tests with coverage
         run: npm run test:coverage
 

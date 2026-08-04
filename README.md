@@ -79,7 +79,14 @@ Future updates will include an automated engine that continuously scans the live
 
 ## Testing
 
-Tests use the real **CTA GTFS feed** (the same feed loaded into `data/gtfs.db`). On first run, the test runner downloads/extracts the feed and builds a shared read-only test database at `data/test/gtfs.db` (this takes a few minutes). Subsequent runs reuse it.
+See [`TESTING.md`](TESTING.md) for the test-data policy, fixture design, and
+testing roadmap.
+
+Most tests are isolated unit tests or API contract tests. A smaller Google GTFS
+spec fixture is available for focused loader cases. CTA's real feed is retained
+as a separate scale smoke test: the first run downloads/extracts it and builds
+a shared read-only database at `data/test/gtfs.db`, which can take several
+minutes; subsequent runs reuse it.
 
 ```bash
 npm run test          # Run tests in watch mode
@@ -91,7 +98,8 @@ npm run format        # Prettier format
 npm run format:check  # Verify formatting (no changes)
 ```
 
-To force a rebuild of the shared test database:
+To force a one-time rebuild of the shared CTA test database before the test
+workers start:
 
 ```bash
 REBUILD_TEST_DB=1 npm run test:run
@@ -101,7 +109,7 @@ REBUILD_TEST_DB=1 npm run test:run
 - `unit/` — Fast, isolated tests (GTFSRepository, DetourEngine, CancellationStore, DetourStore, InstructionStore, HeadwayService, SimulationEngine, RNG)
 - `integration/` — Express API route tests via supertest against the shared test DB
 - `helpers/` — Test utilities (in-memory/temp DB creation, CTA fixture loading)
-- `fixtures/` — Additional GTFS fixture placeholders
+- `fixtures/` — Small GTFS fixtures and fixture documentation; CTA is cached under `data/test/`
 
 A pre-commit hook runs lint-staged (Prettier + ESLint on staged `.ts` files). CI (`.github/workflows/test.yml`) runs formatting, lint, build, and tests with coverage.
 

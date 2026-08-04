@@ -26,7 +26,7 @@
 - **Test directories**: 
   - `src/test/unit/` - Fast, isolated tests with mocks
   - `src/test/integration/` - Full stack tests with real database
-  - `src/test/fixtures/` - Test data (additional GTFS feed placeholders)
+  - `src/test/fixtures/` - Small committed GTFS fixtures
   - `src/test/helpers/` - Test utilities
 - **Test file naming**: `*.test.ts` extension
 - **Test imports**: Use `.js` extension (ES modules)
@@ -34,10 +34,10 @@
   - `npm test` - Run tests in watch mode
   - `npm run test:run` - Run tests once
   - `npm run test:coverage` - Run tests with coverage report
-- **Test data**: Real CTA GTFS feed. A shared read-only test DB is built once from
-  the extracted feed at `data/test/gtfs.db` (via `src/test/global-setup.ts`).
-  Rebuild with `REBUILD_TEST_DB=1`. Unit tests needing a writable/empty DB use
-  `createInMemoryRepository()` from `src/test/helpers/database.ts`.
+- **Test data**: Focused tests should use small fixtures or
+  `createInMemoryRepository()` from `src/test/helpers/database.ts`. A shared
+  read-only CTA scale-test DB is built once at `data/test/gtfs.db` via
+  `src/test/global-setup.ts`; rebuild it with `REBUILD_TEST_DB=1`.
 - **Test isolation**: Each test suite uses an isolated store directory
   (`PERSISTENT_DATA_DIR` temp dir) and never touches development data
 - **Mocking**: Use `nock` or `msw` for HTTP mocking (OSRM, external APIs)

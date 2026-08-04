@@ -6,9 +6,10 @@
 import { loadCTATestDatabase, ctaTestDbExists } from './helpers/fixtures.js'
 
 export default async function globalSetup(): Promise<void> {
-  if (!ctaTestDbExists()) {
+  const rebuild = process.env.REBUILD_TEST_DB === '1'
+  if (!ctaTestDbExists() || rebuild) {
     console.log('  [test] Building shared CTA test database (one-time)...')
-    const repo = await loadCTATestDatabase()
+    const repo = await loadCTATestDatabase({ rebuild })
     repo.close()
     console.log('  [test] Shared CTA test database ready.')
   }

@@ -56,10 +56,13 @@ export function ctaTestDbExists(): boolean {
 /**
  * Build (or return) the shared CTA test database, opening it read-only.
  * On first call the DB is imported from the extracted CTA feed; subsequent
- * calls reuse the cached file. Set REBUILD_TEST_DB=1 to force a rebuild.
+ * calls reuse the cached file. The global setup passes `rebuild: true` when
+ * REBUILD_TEST_DB=1 is set, so worker calls cannot rebuild it concurrently.
  */
-export async function loadCTATestDatabase(): Promise<GTFSRepository> {
-  const rebuild = process.env.REBUILD_TEST_DB === '1'
+export async function loadCTATestDatabase(
+  options: { rebuild?: boolean } = {}
+): Promise<GTFSRepository> {
+  const rebuild = options.rebuild ?? false
   if (!ctaTestDbExists() || rebuild) {
     if (rebuild) {
       console.log('  [test] Rebuilding CTA test database...')

@@ -1,15 +1,19 @@
 # GTFS Test Fixtures
 
-This directory holds small, self-contained GTFS static feeds used by the
-automated test suite. Each feed is imported into an isolated in-memory or
-temp-file SQLite database by the helpers in `src/test/helpers/` — the tests
-never touch the development database at `data/gtfs.db`.
+This directory holds small, self-contained GTFS static feeds for focused
+loader and edge-case tests. Each feed is imported into an isolated in-memory
+or temp-file SQLite database by the helpers in `src/test/helpers/` — these
+tests never touch the development database at `data/gtfs.db`.
+
+The CTA feed is intentionally not stored here. It is a scale smoke test and is
+downloaded and cached as `data/test/gtfs.db`; it should not be the default data
+source for unit tests.
 
 ## Feeds
 
 | File / dir                    | Source                                                              | Notes                                    |
 | ----------------------------- | ------------------------------------------------------------------- | ---------------------------------------- |
-| `gtfs-sample.zip`             | Google "sample-feed-1" (GTFS spec examples)                         | Small, clean, includes `shapes.txt`.     |
+| `gtfs-sample.zip`             | [Google GTFS sample-feed-1](https://github.com/google/transit/blob/master/gtfs/spec/en/examples/sample-feed-1.zip) | Small conformance fixture; `shapes.txt` is header-only. |
 | `gtfs-sample-v2/` (planned)   | Second dataset — TBD                                                | For shape-less / frequency-only coverage.|
 | `gtfs-sample-v3/` (planned)   | Third dataset — TBD                                                 | For route-branch / headway-topology edge cases. |
 
@@ -27,6 +31,8 @@ never touch the development database at `data/gtfs.db`.
 - The Google feed contains `agency.txt`, `calendar.txt`, `calendar_dates.txt`,
   `fare_attributes.txt`, `fare_rules.txt`, `frequencies.txt`, `routes.txt`,
   `shapes.txt`, `stop_times.txt`, `stops.txt`, `trips.txt`.
+- The Google sample's header-only `shapes.txt` is useful for missing-shape
+  behavior, but it cannot exercise populated shape behavior.
 - Feeds without `shapes.txt` (e.g. frequency-based feeds) exercise different
   code paths in `GTFSRepository`/`SimulationEngine` and should be added for
   broader coverage.
