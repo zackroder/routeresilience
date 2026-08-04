@@ -16,6 +16,7 @@ import { ensureCTAFeedExtracted, importGTFSIntoRepo } from '../../server/gtfs/lo
 
 const TEST_DB_DIR = path.resolve(process.cwd(), 'data', 'test')
 const TEST_DB_PATH = path.join(TEST_DB_DIR, 'gtfs.db')
+const MINIMAL_FIXTURE_DIR = path.resolve(process.cwd(), 'src', 'test', 'fixtures', 'gtfs-minimal')
 
 export interface FeedDescriptor {
   key: string
@@ -91,6 +92,17 @@ export async function loadCTATestDatabase(
 
   // Open read-only for tests — mirrors production's dev DB behavior.
   return new GTFSRepository({ dbPath: TEST_DB_PATH, readonly: true })
+}
+
+/**
+ * Import the hand-authored `gtfs-minimal` fixture into a fresh in-memory
+ * repository via the same production `importGTFSIntoRepo()` path. This is the
+ * default data source for focused unit tests: deterministic, offline, and fast.
+ * Callers own the returned repository and must close it.
+ */
+export async function loadMinimalFixture(): Promise<GTFSRepository> {
+  const repo = new GTFSRepository({ memory: true })
+  return importGTFSIntoRepo(repo, MINIMAL_FIXTURE_DIR)
 }
 
 /** Convenience wrapper for the default CTA feed used by most tests. */
