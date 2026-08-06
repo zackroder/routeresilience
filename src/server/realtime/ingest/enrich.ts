@@ -82,10 +82,18 @@ export class GtfsRtEnricher {
       ? this.projectVehicle(trip.shape_id ?? '', shape, stopTimes, lat, lon)
       : this.fallbackGeometry(stopTimes, lat, lon)
 
-    // GTFS-RT stop sequences are 1-based; VehicleState.currentStopIndex is 0-based.
+    // GTFS-RT stop sequences are 1-based; VehicleState.currentStopIndex is
+    // 0-based and points at the last stop reached. The meaning of
+    // current_stop_sequence depends on current_status: STOPPED_AT means it is
+    // the current stop, otherwise it is the stop being approached.
+    //
+    // proto2 decodes an absent field to 0 (not undefined), so treat 0 as "not
+    // provided" and fall back to position-based inference — the feed's lat/lon
+    // is the reliable signal (fixes every vehicle reporting the first stop).
+    const rawSeq = vp.currentStopSequence ?? 0
     const currentStopIndex =
-      vp.currentStopSequence !== undefined
-        ? Math.max(0, Math.min(stopTimes.length - 1, vp.currentStopSequence - 1))
+      rawSeq > 0
+        ? Math.max(0, Math.min(stopTimes.length - 1, rawSeq - (vp.currentStatus === 1 ? 1 : 2)))
         : this.inferStopIndex(segmentDistances, distanceTraveled)
 
     const status = vp.currentStatus === 1 ? 'AT_STOP' : 'IN_TRANSIT'

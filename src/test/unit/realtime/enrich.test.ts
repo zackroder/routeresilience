@@ -50,9 +50,10 @@ describe('GtfsRtEnricher (minimal fixture)', () => {
     expect(state.lat).toBeCloseTo(41.881, 5)
     expect(state.lon).toBeCloseTo(-87.63, 5)
 
-    // currentStopSequence=2 → currentStopIndex 1 (0-based).
-    expect(state.currentStopIndex).toBe(1)
-    expect(state.nextStopId).toBe('stop-c')
+    // currentStatus=2 (IN_TRANSIT_TO) + currentStopSequence=2 means the vehicle
+    // is heading to stop #2 (stop-b): last-passed index is 0, next stop is stop-b.
+    expect(state.currentStopIndex).toBe(0)
+    expect(state.nextStopId).toBe('stop-b')
     expect(state.status).toBe('IN_TRANSIT')
 
     // Segment model is populated and consistent with the fixture shape.
@@ -82,9 +83,40 @@ describe('GtfsRtEnricher (minimal fixture)', () => {
 
     expect(result).not.toBeNull()
     expect(result!.state.status).toBe('AT_STOP')
+    // STOPPED_AT at stop sequence 2 → last-passed index 1, next stop stop-c.
+    expect(result!.state.currentStopIndex).toBe(1)
+    expect(result!.state.nextStopId).toBe('stop-c')
     expect(result!.currentStatus).toBe(1)
     expect(result!.stopId).toBe('stop-b')
     expect(result!.stopSequence).toBe(2)
+  })
+
+  it('falls back to position-based inference when currentStopSequence is absent', () => {
+    const enricher = new GtfsRtEnricher(repo)
+    const entity = baseEntity()
+    // proto2 decodes an absent field to 0, not undefined — simulate the feed
+    // omitting the field entirely.
+    entity.vehicle!.currentStopSequence = 0
+    entity.vehicle!.currentStatus = 2
+    // Vehicle parked near stop-c (lat 41.882) → next stop should be stop-d.
+    entity.vehicle!.position = { latitude: 41.882, longitude: -87.63, bearing: 0, speed: 5 }
+
+    const result = enricher.enrich(entity, now)
+    expect(result).not.toBeNull()
+    expect(result!.state.currentStopIndex).toBe(2)
+    expect(result!.state.nextStopId).toBe('stop-d')
+  })
+
+  it('clamps an out-of-range stop sequence to the trip bounds', () => {
+    const enricher = new GtfsRtEnricher(repo)
+    const entity = baseEntity()
+    // currentStopSequence=1 with IN_TRANSIT_TO semantics yields index -1; clamp to 0.
+    entity.vehicle!.currentStopSequence = 1
+    entity.vehicle!.currentStatus = 2
+    const result = enricher.enrich(entity, now)
+    expect(result).not.toBeNull()
+    expect(result!.state.currentStopIndex).toBe(0)
+    expect(result!.state.nextStopId).toBe('stop-b')
   })
 
   it('computes a delay relative to the interpolated schedule', () => {

@@ -115,6 +115,44 @@ The API servers become completely stateless and primarily serve the **Admin Dash
 
 ---
 
+## Emitted GTFS-RT Feed Entities
+
+Each GTFS-RT `FeedEntity` holds exactly one payload (see the `proto/` definition).
+The enhanced feed emits the following entities, linked together by string IDs
+(rather than nesting):
+
+| Entity | Example ID | Payload | Emitted? |
+| --- | --- | --- | --- |
+| `TripModifications` | `tm_<detourId>` | `selected_trips`, `modifications` (start/end selectors, `replacement_stops`, `service_alert_id`) | ✅ Always for active detours with affected trips |
+| `Shape` | `shape_<detourId>` | `shape_id` = `detour_<detourId>`, `encoded_polyline` of the detour geometry | ✅ Always for active detours |
+| `ServiceAlert` | `alert_<detourId>` | `active_period`, `informed_entity`, cause/effect, header/description text | ✅ Always for active detours |
+| `VehiclePosition` | `vehicleId` | Position, bearing, speed, stop sequence, status | ✅ For every tracked vehicle |
+| `TripUpdate` | — | Stop-time predictions for scheduled and modified trips | ✅ For active trips with live vehicles |
+| `Stop` | `stop_<newId>` | New stop geometry/name | ❌ Not emitted |
+
+### Wiring (by ID reference, not nesting)
+- `TripModifications.selected_trips[].shape_id` → the `shape_id` inside the
+  `Shape` entity (or a static `shapes.txt` shape id).
+- `Modification.replacement_stops[].stop_id` → the `stop_id` inside a `Stop`
+  entity (or a static `stops.txt` stop id).
+- `Modification.service_alert_id` → the `id` of the `ServiceAlert` FeedEntity.
+
+### Why no `Stop` entities today
+The spec only requires `Shape`/`Stop` entities when a modification references
+something **not already in static GTFS**. Our detour replacement stops are
+always existing GTFS static stop IDs (`ReplacementStopDef.stopId`), so consumers
+resolve them against static `stops.txt` — no `Stop` entity is needed.
+
+> [!NOTE]
+> **Future feature: dynamic `Stop` entities.** If a future detour workflow lets
+> operators place brand-new stops that do not exist in static GTFS (e.g. an
+> ad-hoc temporary stop anywhere along the detour path), the feed must emit
+> matching `Stop` entities (`stop_<newId>` with lat/lon/name) alongside the
+> `TripModifications` that references them, exactly as it already does for
+> `Shape`. This is a planned enhancement, not currently implemented.
+
+---
+
 ## Future Scaling Considerations
 
 > [!IMPORTANT]

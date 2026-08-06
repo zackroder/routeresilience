@@ -91,6 +91,16 @@ never started in this mode.
 > demo on `main` (simulation) fully functional while the real feed is used for
 > development and evaluation.
 
+### Emitted GTFS-RT entities
+
+The `/api/gtfs-rt` feed emits `VehiclePosition`, `TripUpdate`, `TripModifications`,
+`Shape`, and `ServiceAlert` entities for active detours. It does **not** emit
+`Stop` entities: replacement stops always reference existing GTFS static stop
+IDs, so consumers resolve them against static `stops.txt`. Emitting dynamic
+`Stop` entities for brand-new stops is a planned future feature. See
+[`ARCHITECTURE.md`](./ARCHITECTURE.md#emitted-gtfs-rt-feed-entities) for the full
+entity/wiring breakdown.
+
 ## Local Development Setup
 
 1. **Clone the repository**
