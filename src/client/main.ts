@@ -2009,7 +2009,11 @@ async function updateVehicles() {
 
       const icon = L.divIcon({
         className: 'vehicle-marker-container',
-        html: `<div class="vehicle-marker" style="transform:rotate(${v.bearing}deg)">🚌</div>`,
+        html: `<div class="vehicle-marker" style="transform:rotate(${v.bearing}deg)" title="${Math.round(v.bearing)}°">
+                 <svg viewBox="0 0 20 20" class="vehicle-direction-icon" aria-hidden="true">
+                   <path d="M10 1.5 L16.5 8 H13.5 V18.5 H6.5 V8 H3.5 Z"/>
+                 </svg>
+               </div>`,
         iconSize: [24, 24],
         iconAnchor: [12, 12],
       })
