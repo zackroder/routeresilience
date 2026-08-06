@@ -88,7 +88,8 @@ describe('API routes', () => {
       feedStub,
       cancellationStore,
       headwayStub,
-      instructionStore
+      instructionStore,
+      simulationStub
     )
     app.use('/api', router)
   })

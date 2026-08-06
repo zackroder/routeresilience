@@ -13,6 +13,9 @@ import { PredictionEngine } from './realtime/predictions.js'
 import { HeadwayService } from './headway/service.js'
 import { InstructionStore } from './instructions/store.js'
 import { apiKeyMiddleware, rateLimitMiddleware } from './api/middleware.js'
+import { getServerConfig } from './config.js'
+import { GtfsRtClient } from './realtime/ingest/gtfsrt-client.js'
+import { GtfsRtVehicleSource } from './realtime/ingest/gtfsrt-vehicle-source.js'
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4000
 
@@ -25,27 +28,42 @@ async function main() {
 
   // ─── 2. Initialize engines ───
   console.log('\n[2/4] Initializing engines...')
+  const config = getServerConfig()
   const detourStore = new DetourStore()
   const cancellationStore = new CancellationStore()
   const instructionStore = new InstructionStore()
   const detourEngine = new DetourEngine(repo, detourStore)
   const simulation = new SimulationEngine(repo, detourEngine, detourStore)
-  const predictions = new PredictionEngine(repo, simulation)
-  const headwayService = new HeadwayService(repo, simulation, predictions)
+
+  const useRealFeed = config.vehicleSource === 'gtfs-rt'
+  const vehicleSource = useRealFeed
+    ? new GtfsRtVehicleSource(
+        repo,
+        new GtfsRtClient({ url: config.gtfsRtUrl, apiKey: config.gtfsRtApiKey }),
+        config.gtfsRtPollIntervalMs
+      )
+    : simulation
+
+  const predictions = new PredictionEngine(repo, vehicleSource)
+  const headwayService = new HeadwayService(repo, vehicleSource, predictions)
   const feedGenerator = new FeedGenerator(
     repo,
     detourEngine,
     detourStore,
-    simulation,
+    vehicleSource,
     predictions,
     cancellationStore
   )
 
-  // ─── 3. Start Simulation ───
-  console.log('\n[3/4] Starting simulation...')
-  // Initialize simulation with active vehicles for *now*
-  simulation.spawnActiveVehicles()
-  simulation.start()
+  // ─── 3. Start Vehicle Source ───
+  console.log(`\n[3/4] Starting vehicle source: ${vehicleSource.sourceName}...`)
+  if (useRealFeed) {
+    // Active vehicles for *now* are whatever the live feed reports.
+    await vehicleSource.start()
+  } else {
+    simulation.spawnActiveVehicles()
+    simulation.start()
+  }
 
   // ─── 4. Start API Server ───
   console.log('\n[4/4] Starting API server...')
@@ -65,7 +83,8 @@ async function main() {
     feedGenerator,
     cancellationStore,
     headwayService,
-    instructionStore
+    instructionStore,
+    vehicleSource
   )
   app.use('/api', apiRouter)
 
@@ -88,11 +107,13 @@ async function main() {
     console.log(`   - API: http://localhost:${PORT}/api`)
     console.log(`   - GTFS Static: http://localhost:${PORT}/api/gtfs/zip (or /gtfs.zip)`)
     console.log(`   - GTFS-RT Feed: http://localhost:${PORT}/api/gtfs-rt`)
+    console.log(`   - Vehicle source: ${vehicleSource.sourceName}`)
   })
 
   // Graceful shutdown
   process.on('SIGINT', () => {
     console.log('\nShutting down...')
+    if (useRealFeed) vehicleSource.stop()
     simulation.stop()
     repo.close()
     process.exit(0)

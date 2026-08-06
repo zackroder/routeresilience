@@ -50,17 +50,46 @@ Experiment in creating intuitive software for documenting and distributing detou
 
 ## Future Enhancements
 
-### 1. GTFS-RT Ingestion & Middleware Proxy
-Currently, RouteResilience runs a high-performance, internal simulation engine to generate thousands of realistic vehicle positions based on the static schedule. 
-
-In a true production deployment, the ultimate model is to configure RouteResilience as a **GTFS-RT Middleware Proxy**. Instead of simulating vehicles, the system will ingest the transit agency's raw, upstream GTFS-RT `VehiclePositions` feed. The application will correlate real buses to the static schedule, seamlessly overlay the user-created detours (`TripModifications`), and emit an enhanced, corrected GTFS-RT feed downstream to platforms like Google Maps and Apple Maps.
-
-See [Production Architecture Design](./ARCHITECTURE.md)
-
 ### 2. Service Management & Headway Adherence
 As a GTFS-RT middleware proxy with real-time knowledge of bus locations and the static schedule, RouteResilience is perfectly positioned to monitor **schedule adherence and headways**. 
 
 Future updates will include an automated engine that continuously scans the live network to identify "bunched" or "gapped" buses. Following a set of configurable agency rules, the system will actively recommend service restoration interventions (such as holding a bus at a control point or expressing a bus to fill a gap) to improve headway reliability and keep the network flowing.
+
+## Vehicle Data Sources
+
+RouteResilience reads live vehicle positions through a single `VehicleDataSource`
+abstraction. Two implementations exist, selected at startup:
+
+- **`simulation`** (default) — the internal high-performance simulation engine.
+  Used for demos and offline development. No credentials required.
+- **`gtfs-rt`** — polls a real agency GTFS-RT `VehiclePositions` feed (e.g.
+  CTA's beta feed) and enriches each vehicle with schedule/geometry context so
+  predictions, headways, and detour overlays work identically to simulation.
+  Useful as a ground-truth "oracle" for validating service-management features.
+
+### Using the real CTA feed
+
+Create a `.env` file in the repo root (gitignored; a template lives at
+`.env.example`). The API key is read from the environment at startup and is
+never logged or committed:
+
+```bash
+# .env
+VEHICLE_SOURCE=gtfs-rt
+GTFS_RT_URL=https://transitdata.transitchicago.com/GtfsRealtime/VehiclePositions.pb
+GTFS_RT_API_KEY=<your CTA developer key>
+GTFS_RT_POLL_INTERVAL_MS=15000
+```
+
+Then start normally (`npm run dev`). The server polls the feed, exposes vehicle
+positions via `/api/vehicles`, and serves the regenerated GTFS-RT feed
+(`/api/gtfs-rt`) with detour/cancellation overlays applied. The simulator is
+never started in this mode.
+
+> Control actions (holding a real bus) are only applicable to the simulation
+> source; in `gtfs-rt` mode those endpoints return a warning. This keeps the
+> demo on `main` (simulation) fully functional while the real feed is used for
+> development and evaluation.
 
 ## Local Development Setup
 

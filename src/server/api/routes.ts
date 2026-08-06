@@ -12,6 +12,7 @@ import { CancellationStore } from '../detour/cancellations.js'
 import { HeadwayService } from '../headway/service.js'
 import { Recommendation } from '../headway/types.js'
 import { InstructionStore } from '../instructions/store.js'
+import { VehicleDataSource } from '../realtime/vehicle-data-source.js'
 
 export function createApiRouter(
   repo: GTFSRepository,
@@ -21,7 +22,8 @@ export function createApiRouter(
   feedGenerator: FeedGenerator,
   cancellationStore: CancellationStore,
   headwayService: HeadwayService,
-  instructionStore: InstructionStore
+  instructionStore: InstructionStore,
+  vehicleSource: VehicleDataSource
 ): Router {
   const router = Router()
 
@@ -578,7 +580,7 @@ export function createApiRouter(
       if (!alive) return
       try {
         const json = await feedGenerator.generateFeedJson()
-        const vehicles = simulation.getVehicles()
+        const vehicles = vehicleSource.getVehicles()
 
         // Compute delay stats
         const delays = vehicles.filter((v) => v.status !== 'COMPLETED').map((v) => v.delaySeconds)
@@ -634,12 +636,13 @@ export function createApiRouter(
     })
   })
 
-  // ─── Vehicle Simulation ───
+  // ─── Vehicle Positions ───
 
-  /** Current simulated vehicle positions */
+  /** Current vehicle positions (simulation or real GTFS-RT source) */
   router.get('/vehicles', (_req: Request, res: Response) => {
-    const vehicles = simulation.getVehicles()
+    const vehicles = vehicleSource.getVehicles()
     res.json({
+      source: vehicleSource.sourceName,
       count: vehicles.length,
       vehicles: vehicles.slice(0, 500).map((v) => ({
         // Limit response size
@@ -661,7 +664,7 @@ export function createApiRouter(
 
   /** Get arrival logs (debug) */
   router.get('/arrivals', (_req: Request, res: Response) => {
-    res.json(simulation.getArrivals())
+    res.json(vehicleSource.getArrivals())
   })
 
   /** Set simulation congestion (speed multiplier) for a route or trip */
@@ -684,19 +687,26 @@ export function createApiRouter(
   /** System health and metrics */
   router.get('/health', (_req: Request, res: Response) => {
     const feedMetrics = feedGenerator.getHealthMetrics()
-    const accuracyMetrics = simulation.getAccuracyMetrics()
+    const vehicleStats =
+      typeof (vehicleSource as any).getStats === 'function'
+        ? (vehicleSource as any).getStats()
+        : undefined
     res.json({
       status: 'UP',
       uptimeSeconds: Math.floor(process.uptime()),
       memoryUsage: process.memoryUsage(),
       feed: feedMetrics,
-      accuracy: accuracyMetrics,
+      accuracy: simulation.getAccuracyMetrics(),
       system: {
         routes: repo.getRouteCount(),
         trips: repo.getTripCount(),
         stops: repo.getStopCount(),
-        activeVehicles: simulation.getVehicleCount(),
+        activeVehicles: vehicleSource.getVehicleCount(),
         activeDetours: detourStore.getActive().length,
+      },
+      source: {
+        name: vehicleSource.sourceName,
+        ...(vehicleStats ? { stats: vehicleStats } : {}),
       },
     })
   })
@@ -707,9 +717,10 @@ export function createApiRouter(
       routes: repo.getRouteCount(),
       trips: repo.getTripCount(),
       stops: repo.getStopCount(),
-      activeVehicles: simulation.getVehicleCount(),
+      activeVehicles: vehicleSource.getVehicleCount(),
       activeDetours: detourStore.getActive().length,
       totalDetours: detourStore.getAll().length,
+      source: vehicleSource.sourceName,
     })
   })
 
@@ -832,10 +843,15 @@ export function createApiRouter(
       res.status(404).json({ error: 'Instruction not found' })
       return
     }
-    if (inst.action === 'HOLD') {
+    if (inst.action === 'HOLD' && vehicleSource.sourceName === 'simulation') {
       simulation.applyHold(inst.vehicleId, inst.holdSeconds)
     }
-    res.json(inst)
+    res.json({
+      ...inst,
+      ...(vehicleSource.sourceName !== 'simulation'
+        ? { note: 'HOLD not applied: only the simulation vehicle source can hold vehicles' }
+        : {}),
+    })
   })
 
   /** Operator reports the instruction complete. */
@@ -845,7 +861,9 @@ export function createApiRouter(
       res.status(404).json({ error: 'Instruction not found' })
       return
     }
-    simulation.clearHold(inst.vehicleId)
+    if (vehicleSource.sourceName === 'simulation') {
+      simulation.clearHold(inst.vehicleId)
+    }
     res.json(inst)
   })
 
@@ -856,7 +874,9 @@ export function createApiRouter(
       res.status(404).json({ error: 'Instruction not found' })
       return
     }
-    simulation.clearHold(inst.vehicleId)
+    if (vehicleSource.sourceName === 'simulation') {
+      simulation.clearHold(inst.vehicleId)
+    }
     res.json(inst)
   })
 
