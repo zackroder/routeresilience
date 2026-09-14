@@ -23,9 +23,15 @@ let selectedRoute: RouteInfo | null = null
 let selectedDirection = 0
 let allRoutes: RouteInfo[] = []
 
+// Basemap: OpenFreeMap vector styles rendered through MapLibre GL
+const BASEMAP_STYLES = {
+  light: 'https://tiles.openfreemap.org/styles/bright',
+  dark: 'https://tiles.openfreemap.org/styles/dark',
+}
+
 // Map layers
 // Map layers
-let tileLayer: any = null
+let basemapLayer: any = null
 let routeShapeLayer: any = null
 let stopsLayer: any = null
 let detourShapeLayer: any = null
@@ -230,17 +236,15 @@ function initMap() {
       [41.6, -88.1], // SW corner
       [42.1, -87.4], // NE corner
     ],
+    maxBoundsViscosity: 1,
     zoomControl: true,
   })
 
-  // Map tiles: CARTO Voyager (CartoDB Voyager)
-  const tileUrl = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
-
-  tileLayer = L.tileLayer(tileUrl, {
+  // Map tiles: OpenFreeMap vector basemap (Bright) rendered via MapLibre GL
+  basemapLayer = L.maplibreGL({
+    style: BASEMAP_STYLES.light,
     attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20,
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://openfreemap.org/">OpenFreeMap</a>',
   }).addTo(map)
 
   // Initialize layer groups
@@ -2664,12 +2668,10 @@ function toggleTheme() {
   isLightTheme = !isLightTheme
   document.body.classList.toggle('light-theme', isLightTheme)
 
-  // Update map tiles
-  const url = isLightTheme
-    ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-    : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+  // Update basemap
+  const style = isLightTheme ? BASEMAP_STYLES.light : BASEMAP_STYLES.dark
 
-  if (tileLayer) tileLayer.setUrl(url)
+  if (basemapLayer) basemapLayer.getMaplibreMap().setStyle(style)
 
   // Update button text? Only icon for now.
 }
