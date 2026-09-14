@@ -1,0 +1,7 @@
+stop_id,stop_name,stop_lat,stop_lon
+stop-a,Stop A,41.8800,-87.6300
+stop-b,Stop B,41.8810,-87.6300
+stop-c,Stop C,41.8820,-87.6300
+stop-d,Stop D,41.8830,-87.6300
+stop-e,Stop E,41.8840,-87.6300
+stop-f,Stop F,41.8830,-87.6310

@@ -77,6 +77,42 @@ Future updates will include an automated engine that continuously scans the live
 4. **Access the Application**
    Open your browser and navigate to `http://localhost:5173`.
 
+## Testing
+
+See [`TESTING.md`](TESTING.md) for the test-data policy, fixture design, and
+testing roadmap.
+
+Most tests are isolated unit tests or API contract tests. A smaller Google GTFS
+spec fixture is available for focused loader cases. CTA's real feed is retained
+as a separate scale smoke test: the first run downloads/extracts it and builds
+a shared read-only database at `data/test/gtfs.db`, which can take several
+minutes; subsequent runs reuse it.
+
+```bash
+npm run test          # Run tests in watch mode
+npm run test:run      # Run tests once
+npm run test:coverage # Run tests with a coverage report
+npm run lint          # ESLint check
+npm run lint:fix      # Auto-fix lint issues
+npm run format        # Prettier format
+npm run format:check  # Verify formatting (no changes)
+```
+
+To force a one-time rebuild of the shared CTA test database before the test
+workers start:
+
+```bash
+REBUILD_TEST_DB=1 npm run test:run
+```
+
+**Test structure** (`src/test/`):
+- `unit/` — Fast, isolated tests (GTFSRepository, DetourEngine, CancellationStore, DetourStore, InstructionStore, HeadwayService, SimulationEngine, RNG)
+- `integration/` — Express API route tests via supertest against the shared test DB
+- `helpers/` — Test utilities (in-memory/temp DB creation, CTA fixture loading)
+- `fixtures/` — Small GTFS fixtures and fixture documentation; CTA is cached under `data/test/`
+
+A pre-commit hook runs lint-staged (Prettier + ESLint on staged `.ts` files). CI (`.github/workflows/test.yml`) runs formatting, lint, build, and tests with coverage.
+
 
 
 ## API Endpoints

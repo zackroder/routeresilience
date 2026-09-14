@@ -12,6 +12,9 @@
     rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
   <link rel="stylesheet" href="./style.css">
 </head>
 
@@ -40,6 +43,10 @@
           <span class="nav-icon">🚫</span>
           <span class="nav-label">Cancelled</span>
           <span class="nav-badge" id="nav-cancelled-count" style="display:none">0</span>
+        </button>
+        <button class="nav-item" data-view="headways" title="Headways">
+          <span class="nav-icon">📏</span>
+          <span class="nav-label">Headways</span>
         </button>
       </div>
 
@@ -321,6 +328,60 @@
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- HEADWAYS VIEW -->
+        <div id="view-headways" class="view-container">
+          <div class="headway-view-header">
+            <div style="display:flex;align-items:center;gap:12px">
+              <h2>Headways</h2>
+              <div class="headway-controls">
+                <select id="headway-route-select" class="headway-select">
+                  <option value="">Select route...</option>
+                </select>
+                <select id="headway-direction-select" class="headway-select">
+                  <option value="">All directions</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" id="btn-refresh-headways" title="Refresh">↻</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <div class="legend-item"><span class="legend-color" style="background:var(--accent-blue)"></span> Normal</div>
+              <div class="legend-item"><span class="legend-color" style="background:var(--accent-red)"></span> Bunched</div>
+              <div class="legend-item"><span class="legend-color" style="background:var(--accent-orange)"></span> Gapped</div>
+              <div class="legend-item"><span class="legend-color" style="background:var(--text-muted)"></span> Stale</div>
+            </div>
+          </div>
+          <div id="headway-summary" class="headway-summary"></div>
+          <div class="headway-panels">
+            <!-- Recommendations and Operator Instructions panels disabled for now
+            <div class="panel headway-panel">
+              <div class="panel-header">
+                <h3>Recommendations</h3>
+              </div>
+              <div id="headway-recommendations" class="headway-panel-body">
+                <div class="empty-state" style="padding:12px">Select a route</div>
+              </div>
+            </div>
+            <div class="panel headway-panel">
+              <div class="panel-header">
+                <h3>Operator Instructions</h3>
+              </div>
+              <div id="headway-instructions" class="headway-panel-body">
+                <div class="empty-state" style="padding:12px">No active instructions</div>
+              </div>
+            </div>
+            -->
+          </div>
+          <div class="headway-view-content">
+            <div class="headway-scroll" id="headway-scroll">
+              <div id="headway-chart-container">
+                <div class="loading-spinner">Select a route to view headways</div>
+              </div>
+              <div id="headway-bus-tooltip" class="headway-tooltip" style="display:none"></div>
+            </div>
+          </div>
+          <div id="headway-table-container" class="headway-table-container"></div>
         </div>
 
       </main>

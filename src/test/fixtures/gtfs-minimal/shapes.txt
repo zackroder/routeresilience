@@ -1,0 +1,10 @@
+shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence
+shape-trunk,41.8800,-87.6300,1
+shape-trunk,41.8810,-87.6300,2
+shape-trunk,41.8820,-87.6300,3
+shape-trunk,41.8830,-87.6300,4
+shape-trunk,41.8840,-87.6300,5
+shape-branch,41.8800,-87.6300,1
+shape-branch,41.8810,-87.6300,2
+shape-branch,41.8820,-87.6300,3
+shape-branch,41.8830,-87.6310,4

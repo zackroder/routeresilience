@@ -10,8 +10,11 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-# Pre-build GTFS database into the image
-RUN npx tsx scripts/build-gtfs.ts
+# Pre-build GTFS database into the image.
+# CACHEBUST busts the layer cache so a no-change redeploy still fetches fresh
+# CTA data. Pass a unique value: fly deploy --build-arg CACHEBUST=<timestamp>
+ARG CACHEBUST=0
+RUN echo "cachebust=${CACHEBUST}" && npx tsx scripts/build-gtfs.ts
 
 EXPOSE 3000
 CMD ["npm", "start"]
